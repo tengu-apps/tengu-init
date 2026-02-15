@@ -2,19 +2,23 @@
 //!
 //! Provisions a new Hetzner Cloud server with Tengu PaaS installed.
 
+mod providers;
+
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{env, fs, thread};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Color, Table};
 use console::{style, Emoji};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use tera::Tera;
+
+use providers::{hetzner::ServerParams, Hetzner};
 
 static LOOKING_GLASS: Emoji<'_, '_> = Emoji("🔍 ", "");
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
@@ -291,7 +295,7 @@ fn main() -> Result<()> {
     print_banner();
 
     // Get server type info
-    let type_info = get_server_type_info(&resolved.server_type)?;
+    let type_info = Hetzner::server_type_info(&resolved.server_type)?;
 
     // Print configuration table
     print_config_table(&resolved, &type_info);
@@ -303,7 +307,7 @@ fn main() -> Result<()> {
     }
 
     // Check if server exists
-    if server_exists(&resolved.name)? {
+    if Hetzner::server_exists(&resolved.name)? {
         println!(
             "\n{} Server '{}' already exists",
             style("!").yellow(),
@@ -322,7 +326,7 @@ fn main() -> Result<()> {
             }
         }
 
-        delete_server(&resolved.name)?;
+        Hetzner::delete_server(&resolved.name)?;
     }
 
     // Generate cloud-init
@@ -338,16 +342,19 @@ fn main() -> Result<()> {
 
     // Create server
     println!("\n{} Creating server...", ROCKET);
-    let ip = create_server(&resolved, temp_file.path())?;
+    let params = ServerParams {
+        name: &resolved.name,
+        server_type: &resolved.server_type,
+        image: &resolved.image,
+        location: &resolved.location,
+        cloud_init_path: temp_file.path(),
+    };
+    let ip = Hetzner::create_server(&params)?;
 
     println!("  {} IP: {}", style("→").dim(), style(&ip).cyan());
 
     // Remove old host key
-    let _ = Command::new("ssh-keygen")
-        .args(["-R", &ip])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    Hetzner::clear_host_key(&ip);
 
     // Wait for SSH
     wait_for_ssh(&ip)?;
@@ -405,63 +412,6 @@ fn print_config_table(cfg: &ResolvedConfig, type_info: &str) {
     println!("{table}");
 }
 
-fn get_server_type_info(server_type: &str) -> Result<String> {
-    let output = Command::new("hcloud")
-        .args([
-            "server-type",
-            "describe",
-            server_type,
-            "-o",
-            "format={{.Cores}} cores, {{.Memory}}GB RAM, {{.Architecture}}",
-        ])
-        .output()
-        .context("Failed to run hcloud")?;
-
-    if !output.status.success() {
-        bail!("Failed to get server type info");
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn server_exists(name: &str) -> Result<bool> {
-    let status = Command::new("hcloud")
-        .args(["server", "describe", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("Failed to run hcloud")?;
-
-    Ok(status.success())
-}
-
-fn delete_server(name: &str) -> Result<()> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message(format!("Deleting {}...", name));
-    spinner.enable_steady_tick(Duration::from_millis(100));
-
-    let status = Command::new("hcloud")
-        .args(["server", "delete", name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("Failed to delete server")?;
-
-    if !status.success() {
-        spinner.finish_with_message(format!("{} Failed to delete server", CROSS));
-        bail!("Failed to delete server");
-    }
-
-    spinner.finish_with_message(format!("{} Deleted {}", CHECK, name));
-    thread::sleep(Duration::from_secs(2));
-    Ok(())
-}
-
 fn render_cloud_init(cfg: &ResolvedConfig) -> Result<String> {
     let mut tera = Tera::default();
     tera.add_raw_template("cloud-init", TEMPLATE)?;
@@ -494,52 +444,6 @@ fn print_cloud_init_preview(cfg: &ResolvedConfig) -> Result<()> {
     Ok(())
 }
 
-fn create_server(cfg: &ResolvedConfig, cloud_init_path: &std::path::Path) -> Result<String> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message(format!("Provisioning {} on Hetzner...", cfg.name));
-    spinner.enable_steady_tick(Duration::from_millis(100));
-
-    let output = Command::new("hcloud")
-        .args([
-            "server",
-            "create",
-            "--name",
-            &cfg.name,
-            "--type",
-            &cfg.server_type,
-            "--image",
-            &cfg.image,
-            "--location",
-            &cfg.location,
-            "--user-data-from-file",
-            cloud_init_path.to_str().unwrap(),
-        ])
-        .output()
-        .context("Failed to create server")?;
-
-    if !output.status.success() {
-        spinner.finish_with_message(format!("{} Failed to create server", CROSS));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Failed to create server: {}", stderr);
-    }
-
-    spinner.finish_with_message(format!("{} Server created", CHECK));
-
-    // Get IP
-    let output = Command::new("hcloud")
-        .args(["server", "ip", &cfg.name])
-        .output()
-        .context("Failed to get server IP")?;
-
-    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(ip)
-}
-
 fn wait_for_ssh(ip: &str) -> Result<()> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
@@ -553,16 +457,11 @@ fn wait_for_ssh(ip: &str) -> Result<()> {
     loop {
         let status = Command::new("ssh")
             .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=5",
+                "-o", "BatchMode=yes",
                 &format!("chi@{}", ip),
                 "true",
             ])
