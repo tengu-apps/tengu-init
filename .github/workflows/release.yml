@@ -15,15 +15,15 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: linux-amd64
+            name: tengu-init-linux-amd64
             cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: linux-arm64
+            name: tengu-init-linux-arm64
             cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: macos-arm64
+            name: tengu-init-apple-silicon
             cross: false
 
     runs-on: ${{ matrix.os }}
@@ -47,16 +47,14 @@ jobs:
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../tengu-init-${{ matrix.name }}.tar.gz tengu-init
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tengu-init-${{ matrix.name }}
-          path: tengu-init-${{ matrix.name }}.tar.gz
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
 
   release:
     needs: build
@@ -71,5 +69,5 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.tar.gz
+          files: artifacts/*
           generate_release_notes: true
