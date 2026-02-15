@@ -58,9 +58,13 @@ jobs:
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build deb
-        if: matrix.deb != ''
+      - name: Build deb (native)
+        if: matrix.deb != '' && !matrix.cross
         run: cargo deb --no-build --target ${{ matrix.target }} --output ${{ matrix.deb }}
+
+      - name: Build deb (cross)
+        if: matrix.deb != '' && matrix.cross
+        run: cargo deb --no-build --no-strip --target ${{ matrix.target }} --output ${{ matrix.deb }}
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
