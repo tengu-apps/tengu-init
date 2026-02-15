@@ -102,6 +102,8 @@ jobs:
             --password "$APPLE_APP_PASSWORD" \
             --wait
           rm tengu-init.zip
+          # Staple the notarization ticket to the binary
+          xcrun stapler staple target/${{ matrix.target }}/release/tengu-init
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/tengu-init ${{ matrix.artifact }}
