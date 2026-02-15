@@ -92,8 +92,6 @@ runcmd:
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
 
-  # Note: Caddy will be built with xcaddy for Cloudflare DNS-01 support
-
   # Add PostgreSQL repository
   - curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
   - echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
@@ -101,54 +99,20 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin postgresql-16 postgresql-16-pgvector
 
-  # Install Go 1.24 (required for Caddy - Ubuntu's golang-go is too old)
+  # Install tengu-caddy (Caddy with Cloudflare DNS plugin)
   - |
     ARCH=$(dpkg --print-architecture)
-    curl -sL "https://go.dev/dl/go1.24.1.linux-${ARCH}.tar.gz" | tar -C /usr/local -xzf -
-    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/golang.sh
+    wget -q "https://github.com/saiden-dev/tengu-caddy/releases/latest/download/tengu-caddy_2.10.2-1_${ARCH}.deb" -O /tmp/tengu-caddy.deb
+    dpkg -i /tmp/tengu-caddy.deb
+    rm /tmp/tengu-caddy.deb
 
-  # Build Caddy with Cloudflare DNS plugin using xcaddy
+  # Add Cloudflare API token to Caddy service
   - |
-    export PATH=/usr/local/go/bin:$PATH
-    export HOME=/root
-    export GOPATH=/root/go
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    /root/go/bin/xcaddy build --with github.com/caddy-dns/cloudflare --output /usr/bin/caddy
-    chmod +x /usr/bin/caddy
-
-    # Create caddy user and group
-    groupadd --system caddy 2>/dev/null || true
-    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
-
-    # Create required directories
-    mkdir -p /etc/caddy/sites /var/lib/caddy/.local/share/caddy
-    chown -R caddy:caddy /var/lib/caddy
-
-  # Create Caddy systemd service with Cloudflare token
-  - |
-    cat > /etc/systemd/system/caddy.service << SERVICEEOF
-    [Unit]
-    Description=Caddy
-    Documentation=https://caddyserver.com/docs/
-    After=network.target network-online.target
-    Requires=network-online.target
-
+    mkdir -p /etc/systemd/system/caddy.service.d
+    cat > /etc/systemd/system/caddy.service.d/cloudflare.conf << CFEOF
     [Service]
-    Type=notify
-    User=caddy
-    Group=caddy
     Environment="CF_API_TOKEN={{ cf_api_key }}"
-    ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
-    ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
-    TimeoutStopSec=5s
-    LimitNOFILE=1048576
-    PrivateTmp=true
-    ProtectSystem=full
-    AmbientCapabilities=CAP_NET_BIND_SERVICE
-
-    [Install]
-    WantedBy=multi-user.target
-    SERVICEEOF
+    CFEOF
 
   # Configure Caddy with DNS-01 challenge for Cloudflare
   - |
