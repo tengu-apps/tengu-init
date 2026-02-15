@@ -31,6 +31,7 @@ packages:
   - vim
   - fail2ban
   - ufw
+  - golang-go
 
 write_files:
   - path: /etc/fail2ban/jail.local
@@ -92,25 +93,63 @@ runcmd:
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
 
-  # Add Caddy repository
-  - curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  - echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" > /etc/apt/sources.list.d/caddy-stable.list
+  # Note: Caddy will be built with xcaddy for Cloudflare DNS-01 support
 
   # Add PostgreSQL repository
   - curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
   - echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
 
   - apt-get update
-  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin caddy postgresql-16 postgresql-16-pgvector
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin postgresql-16 postgresql-16-pgvector
 
-  # Create required directories
-  - mkdir -p /etc/caddy/sites
+  # Build Caddy with Cloudflare DNS plugin using xcaddy
+  - |
+    export HOME=/root
+    export GOPATH=/root/go
+    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+    /root/go/bin/xcaddy build --with github.com/caddy-dns/cloudflare --output /usr/bin/caddy
+    chmod +x /usr/bin/caddy
 
-  # Configure Caddy for Tengu
+    # Create caddy user and group
+    groupadd --system caddy 2>/dev/null || true
+    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
+
+    # Create required directories
+    mkdir -p /etc/caddy/sites /var/lib/caddy/.local/share/caddy
+    chown -R caddy:caddy /var/lib/caddy
+
+  # Create Caddy systemd service with Cloudflare token
+  - |
+    cat > /etc/systemd/system/caddy.service << SERVICEEOF
+    [Unit]
+    Description=Caddy
+    Documentation=https://caddyserver.com/docs/
+    After=network.target network-online.target
+    Requires=network-online.target
+
+    [Service]
+    Type=notify
+    User=caddy
+    Group=caddy
+    Environment="CF_API_TOKEN={{ cf_api_key }}"
+    ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+    ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
+    TimeoutStopSec=5s
+    LimitNOFILE=1048576
+    PrivateTmp=true
+    ProtectSystem=full
+    AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+    [Install]
+    WantedBy=multi-user.target
+    SERVICEEOF
+
+  # Configure Caddy with DNS-01 challenge for Cloudflare
   - |
     cat > /etc/caddy/Caddyfile << 'CADDYEOF'
     {
         email {{ cf_email }}
+        acme_dns cloudflare {env.CF_API_TOKEN}
     }
 
     api.{{ domain_platform }} {
@@ -127,6 +166,7 @@ runcmd:
     CADDYEOF
 
   # Enable base services
+  - systemctl daemon-reload
   - systemctl enable --now docker
   - systemctl enable --now caddy
   - systemctl enable --now postgresql
