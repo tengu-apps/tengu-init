@@ -45,7 +45,7 @@ write_files:
       findtime = 600
 
   - path: /etc/tengu/config.toml
-    permissions: '0600'
+    permissions: '0640'
     content: |
       # Tengu PaaS Configuration
       domain = "{{ domain_apps }}"
@@ -62,6 +62,12 @@ write_files:
       api = "{{ domain_api }}"
       docs = "{{ domain_docs }}"
       git = "{{ domain_git }}"
+
+  - path: /etc/tengu/env
+    permissions: '0640'
+    content: |
+      # Tengu environment variables
+      RUST_LOG=info
 
   - path: /etc/update-motd.d/99-tengu
     permissions: '0755'
@@ -140,6 +146,9 @@ runcmd:
 
   # Ensure PostgreSQL is fully configured before Tengu
   - apt-get install -f -y
+
+  # Fix /etc/tengu permissions before installing (systemd expects 750)
+  - chmod 750 /etc/tengu
 
   # Install Tengu from GitHub (arch-aware)
   - |
