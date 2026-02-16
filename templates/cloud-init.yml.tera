@@ -120,13 +120,15 @@ runcmd:
     Environment="CF_API_TOKEN={{ cf_api_key }}"
     CFEOF
 
-  # Configure Caddy with DNS-01 challenge for Cloudflare
+  # Configure Caddy (TLS-ALPN-01 used for auto HTTPS)
+  - mkdir -p /etc/caddy/sites
   - |
     cat > /etc/caddy/Caddyfile << 'CADDYEOF'
     {
         email {{ cf_email }}
-        acme_dns cloudflare {env.CF_API_TOKEN}
     }
+
+    import sites/*.caddy
 
     api.{{ domain_platform }} {
         reverse_proxy localhost:8080
@@ -176,6 +178,12 @@ runcmd:
 
   # Setup Cloudflare DNS records
   - tengu cloudflare config
+
+  # Create admin user with API token
+  - |
+    TENGU_USER_JSON=$(tengu user add chi --key '{{ ssh_key }}' --admin --json)
+    TENGU_TOKEN=$(echo "$TENGU_USER_JSON" | jq -r '.token')
+    echo "TENGU_TOKEN=$TENGU_TOKEN" >> /etc/tengu/env
 
   # Notify on completion
   - |
