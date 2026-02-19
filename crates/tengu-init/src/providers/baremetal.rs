@@ -14,9 +14,9 @@ use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig};
 
 /// Baremetal server provisioning via SSH
 pub struct Baremetal {
-    /// SSH host (can be user@host format)
+    /// SSH host
     pub host: String,
-    /// SSH user (optional, extracted from host or defaults to "root")
+    /// SSH user (must have passwordless sudo access)
     pub user: String,
     /// SSH port
     pub port: u16,
@@ -26,13 +26,19 @@ impl Baremetal {
     /// Create a new baremetal provider from a host specification
     ///
     /// Host can be:
-    /// - `hostname` (uses default user "root")
+    /// - `hostname` (uses current username)
     /// - `user@hostname` (extracts user)
+    ///
+    /// The user must have passwordless sudo access on the target server.
     pub fn new(host: &str, port: u16) -> Self {
         let (user, hostname) = if let Some((u, h)) = host.split_once('@') {
             (u.to_string(), h.to_string())
         } else {
-            ("root".to_string(), host.to_string())
+            // Use current username as default
+            let current_user = std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "chi".to_string());
+            (current_user, host.to_string())
         };
 
         Self {

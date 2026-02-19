@@ -827,7 +827,7 @@ enum Commands {
 
     /// Provision on existing baremetal server via SSH
     Baremetal {
-        /// SSH host (e.g., root@192.168.1.100)
+        /// SSH destination (user@host). User must have passwordless sudo
         #[arg()]
         host: String,
 
@@ -869,11 +869,11 @@ tengu-init
 tengu-init --dry-run
 
 # New: Baremetal provisioning
-tengu-init baremetal root@192.168.1.100
-tengu-init baremetal root@my-server.com --port 2222
+tengu-init baremetal chi@192.168.1.100
+tengu-init baremetal chi@my-server.com --port 2222
 
 # New: Generate script without executing
-tengu-init baremetal root@server --script-only > provision.sh
+tengu-init baremetal chi@server --script-only > provision.sh
 
 # New: Just show the generated config
 tengu-init show cloud-init

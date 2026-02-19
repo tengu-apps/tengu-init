@@ -182,7 +182,7 @@ struct HetznerArgs {
 
 #[derive(Parser, Debug)]
 struct BaremetalArgs {
-    /// SSH destination (user@host or just host)
+    /// SSH destination (user@host). User must have passwordless sudo
     #[arg()]
     host: String,
 
