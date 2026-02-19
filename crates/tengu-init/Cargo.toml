@@ -1,0 +1,54 @@
+[package]
+name = "tengu-init"
+version = "0.2.0"
+description = "Provision Tengu PaaS on Hetzner Cloud"
+keywords = ["tengu", "paas", "hetzner", "cloud-init", "provisioning"]
+categories = ["command-line-utilities"]
+
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# CLI
+clap.workspace = true
+
+# Serialization
+serde.workspace = true
+toml.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# CLI output
+comfy-table.workspace = true
+console.workspace = true
+dialoguer.workspace = true
+indicatif.workspace = true
+
+# Templating
+tera.workspace = true
+
+# Temp files
+tempfile.workspace = true
+
+# Workspace crates
+tengu-provision = { path = "../tengu-provision" }
+
+[lints]
+workspace = true
+
+[package.metadata.deb]
+maintainer = "Chi <chi@localhost>"
+copyright = "2026 Chi"
+extended-description = """\
+Provision Tengu PaaS on Hetzner Cloud with a single command. \
+Handles server creation, cloud-init configuration, SSL certificates, \
+and service setup automatically."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/tengu-init", "usr/bin/", "755"],
+]

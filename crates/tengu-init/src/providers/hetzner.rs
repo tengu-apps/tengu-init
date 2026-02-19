@@ -8,10 +8,10 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -42,7 +42,7 @@ impl Hetzner {
             .context("Failed to run hcloud - is it installed?")?;
 
         if !output.status.success() {
-            bail!("Unknown server type: {}", server_type);
+            bail!("Unknown server type: {server_type}");
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -68,7 +68,7 @@ impl Hetzner {
                 .template("{spinner:.cyan} {msg}")
                 .unwrap(),
         );
-        spinner.set_message(format!("Deleting {}...", name));
+        spinner.set_message(format!("Deleting {name}..."));
         spinner.enable_steady_tick(Duration::from_millis(100));
 
         let status = Command::new("hcloud")
@@ -120,7 +120,7 @@ impl Hetzner {
         if !output.status.success() {
             spinner.finish_with_message(format!("{} Failed to create server", style("✗").red()));
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to create server: {}", stderr);
+            bail!("Failed to create server: {stderr}");
         }
 
         spinner.finish_with_message(format!("{} Server created", style("✓").green()));

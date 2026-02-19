@@ -1,0 +1,27 @@
+[package]
+name = "tengu-provision"
+version = "0.2.0"
+description = "Installation step library for Tengu PaaS provisioning"
+keywords = ["tengu", "paas", "provisioning", "cloud-init", "idempotent"]
+categories = ["command-line-utilities"]
+
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Serialization
+serde.workspace = true
+serde_yaml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Crypto (for content checksums)
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

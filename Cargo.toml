@@ -1,25 +1,26 @@
-[package]
-name = "tengu-init"
-version = "0.1.11"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.93"
-description = "Provision Tengu PaaS on Hetzner Cloud"
 license = "MIT"
 authors = ["Chi <chi@localhost>"]
 repository = "https://github.com/saiden-dev/tengu-init"
-keywords = ["tengu", "paas", "hetzner", "cloud-init", "provisioning"]
-categories = ["command-line-utilities"]
 
-[dependencies]
-# CLI
-clap = { version = "4", features = ["derive"] }
+[workspace.dependencies]
+# Error handling
+anyhow = "1"
+thiserror = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 toml = "0.8"
 
-# Error handling
-anyhow = "1"
+# CLI
+clap = { version = "4", features = ["derive"] }
 
 # CLI output
 comfy-table = "7"
@@ -33,25 +34,22 @@ tera = "1"
 # Temp files
 tempfile = "3"
 
-[package.metadata.deb]
-maintainer = "Chi <chi@localhost>"
-copyright = "2026 Chi"
-extended-description = """\
-Provision Tengu PaaS on Hetzner Cloud with a single command. \
-Handles server creation, cloud-init configuration, SSL certificates, \
-and service setup automatically."""
-section = "utils"
-priority = "optional"
-assets = [
-    ["target/release/tengu-init", "usr/bin/", "755"],
-]
+# Crypto (for checksums)
+sha2 = "0.10"
+hex = "0.4"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# Builder pattern methods intentionally return Self
+return_self_not_must_use = "allow"
+# Cloud-init config needs multiple bools
+struct_excessive_bools = "allow"
+# Format push is fine for script building
+format_push_string = "allow"
