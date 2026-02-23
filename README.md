@@ -7,14 +7,21 @@
 <h1 align="center">tengu-init</h1>
 
 <p align="center">
-  <strong>Provision Tengu PaaS on Hetzner Cloud</strong>
+  <strong>Provision Tengu PaaS servers</strong>
 </p>
 
 <p align="center">
-  One command to spin up a fully configured <a href="https://tengu.to">Tengu</a> server with SSL, PostgreSQL, and git push deploys.
+  One command to spin up a fully configured <a href="https://tengu.to">Tengu</a> server with SSL, PostgreSQL, Docker, and git push deploys.
 </p>
 
 ---
+
+## Features
+
+- **Hetzner Cloud** - Automatic VM provisioning via cloud-init
+- **Baremetal** - SSH-based provisioning for existing servers
+- **Idempotent** - Safe to re-run, only applies needed changes
+- **Multi-arch** - Supports both ARM64 and x86_64
 
 ## Install
 
@@ -22,12 +29,14 @@
 cargo install tengu-init
 ```
 
-**Requires:** [hcloud CLI](https://github.com/hetznercloud/cli) configured with an API token.
+**Requires:** [hcloud CLI](https://github.com/hetznercloud/cli) configured with an API token (for Hetzner provisioning).
 
 ## Usage
 
+### Hetzner Cloud (default)
+
 ```bash
-# Interactive provisioning with config file
+# Interactive provisioning
 tengu-init
 
 # Preview without creating
@@ -35,6 +44,29 @@ tengu-init --dry-run
 
 # Override server type
 tengu-init --server-type cpx41
+```
+
+### Baremetal Server
+
+```bash
+# Provision existing server via SSH
+tengu-init baremetal chi@192.168.1.100
+
+# Custom SSH port
+tengu-init baremetal chi@my-server.com --port 2222
+
+# Generate script only (don't execute)
+tengu-init baremetal chi@server --script-only > provision.sh
+```
+
+### Show Generated Config
+
+```bash
+# View cloud-init YAML
+tengu-init show cloud-init
+
+# View bash script
+tengu-init show bash
 ```
 
 ## Configuration
@@ -83,10 +115,29 @@ ARM servers (cax*) are recommended—cheaper and Tengu builds for both architect
 
 ## What Gets Installed
 
-- **Docker** - Container runtime
-- **Caddy** - Automatic HTTPS reverse proxy
-- **PostgreSQL 16** - Database with pgvector extension
-- **Tengu** - PaaS server with SSH git endpoint
+| Component | Description |
+|-----------|-------------|
+| **Docker** | Container runtime (docker.io) |
+| **tengu-caddy** | Caddy with Cloudflare DNS plugin for automatic HTTPS |
+| **PostgreSQL 18** | Database with pgvector extension for AI/embeddings |
+| **Ollama** | Local LLM inference for RAG features |
+| **Tengu** | PaaS server with SSH git endpoint and API |
+| **fail2ban** | Intrusion prevention |
+| **ufw** | Firewall (ports 22, 80, 443) |
+
+## Project Structure
+
+```
+tengu-init/
+├── crates/
+│   ├── tengu-init/        # CLI binary
+│   │   └── templates/     # Tera templates for cloud-init
+│   └── tengu-provision/   # Library for provisioning steps
+│       └── src/
+│           ├── steps/     # Idempotent installation steps
+│           ├── render/    # Output renderers (cloud-init, bash)
+│           └── manifest.rs
+```
 
 ## License
 
