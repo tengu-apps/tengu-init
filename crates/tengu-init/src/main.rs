@@ -32,7 +32,7 @@ static GEAR: Emoji<'_, '_> = Emoji("⚙️  ", "");
 static FOLDER: Emoji<'_, '_> = Emoji("📁 ", "");
 
 const TEMPLATE: &str = include_str!("../templates/cloud-init.yml.tera");
-const DEFAULT_RELEASE: &str = "v0.1.0-a680bf0";
+const DEFAULT_RELEASE: &str = "v0.1.0-22879bf";
 
 /// Configuration file structure
 /// Path: ~/.config/tengu/init.toml (XDG-style, same as main tengu config)
