@@ -1,6 +1,6 @@
 [package]
 name = "tengu-init"
-version = "0.2.2"
+version = "0.2.3"
 description = "Provision Tengu PaaS on Hetzner Cloud"
 keywords = ["tengu", "paas", "hetzner", "cloud-init", "provisioning"]
 categories = ["command-line-utilities"]
@@ -35,7 +35,7 @@ tera.workspace = true
 tempfile.workspace = true
 
 # Workspace crates
-tengu-provision = { path = "../tengu-provision", version = "0.2.2" }
+tengu-provision = { path = "../tengu-provision" }
 
 [lints]
 workspace = true
