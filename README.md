@@ -26,8 +26,10 @@
 ## Install
 
 ```bash
-cargo install tengu-init
+curl -fsSL https://raw.githubusercontent.com/tengu-apps/tengu-init/master/install.sh | sh
 ```
+
+Or download binaries directly from [releases](https://github.com/tengu-apps/tengu-init/releases).
 
 **Requires:** [hcloud CLI](https://github.com/hetznercloud/cli) configured with an API token (for Hetzner provisioning).
 
