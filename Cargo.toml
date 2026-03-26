@@ -7,7 +7,7 @@ edition = "2024"
 rust-version = "1.93"
 license = "MIT"
 authors = ["Chi <chi@localhost>"]
-repository = "https://github.com/saiden-dev/tengu-init"
+repository = "https://github.com/tengu-apps/tengu-init"
 
 [workspace.dependencies]
 # Error handling
