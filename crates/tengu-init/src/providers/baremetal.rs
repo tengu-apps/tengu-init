@@ -203,14 +203,15 @@ impl Baremetal {
     /// Execute script and stream progress
     fn execute_script(&self, total_steps: usize) -> Result<()> {
         let mut args = self.ssh_args();
-        args.push("-t".into()); // Allocate PTY for better output
         args.push(self.ssh_destination());
-        args.push("sudo /tmp/tengu-provision.sh".into());
+        // Redirect stderr to /dev/null on remote — we parse progress from stdout markers.
+        // Without this, stderr fills the pipe buffer and deadlocks the SSH process.
+        args.push("sudo /tmp/tengu-provision.sh 2>/tmp/tengu-provision.err".into());
 
         let mut child = Command::new("ssh")
             .args(&args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .context("Failed to execute script")?;
 

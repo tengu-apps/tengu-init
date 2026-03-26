@@ -207,6 +207,8 @@ impl Manifest {
         // =========================================================
         // Phase 10: Enable and Start Services
         // =========================================================
+        // docker.service requires docker.socket for socket activation
+        manifest.add_step(EnsureService::new("docker.socket"));
         manifest.add_step(EnsureService::new("docker"));
         manifest.add_step(EnsureService::new("postgresql"));
         manifest.add_step(EnsureService::new("fail2ban"));
