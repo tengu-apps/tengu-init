@@ -1,7 +1,7 @@
-//! Cloud provider implementations
+//! Server provisioning implementations
 
-pub mod baremetal;
 pub mod hetzner;
+pub mod ssh;
 
-pub use baremetal::{Baremetal, TunnelConfig};
 pub use hetzner::Hetzner;
+pub use ssh::{SshProvider, TunnelConfig};

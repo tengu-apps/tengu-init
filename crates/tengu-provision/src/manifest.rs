@@ -292,6 +292,28 @@ impl Manifest {
             .unless(r#"sudo -u postgres psql -d tengu -tAc "SELECT 1 FROM pg_extension WHERE extname='vector'" | grep -q 1"#),
         );
 
+        // =========================================================
+        // Phase 13: Create Tengu Admin User
+        // =========================================================
+
+        // Create admin user with SSH key and save token
+        let ssh_key = config.ssh_keys.first().map(|s| s.as_str()).unwrap_or("");
+        let create_user_cmd = format!(
+            r#"TENGU_USER_JSON=$(tengu user add {user} --key '{ssh_key}' --admin --json 2>/dev/null || echo '{{}}'); \
+               TENGU_TOKEN=$(echo "$TENGU_USER_JSON" | jq -r '.token // empty'); \
+               if [ -n "$TENGU_TOKEN" ]; then \
+                   grep -q "^TENGU_TOKEN=" /etc/tengu/env 2>/dev/null && \
+                       sed -i "s/^TENGU_TOKEN=.*/TENGU_TOKEN=$TENGU_TOKEN/" /etc/tengu/env || \
+                       echo "TENGU_TOKEN=$TENGU_TOKEN" >> /etc/tengu/env; \
+               fi"#,
+            user = config.user,
+            ssh_key = ssh_key,
+        );
+        manifest.add_step(
+            RunCommand::new("Create Tengu admin user", &create_user_cmd)
+                .unless(&format!(r#"tengu user list --json 2>/dev/null | jq -e '.[] | select(.name == "{}")' >/dev/null"#, config.user)),
+        );
+
         manifest
     }
 }

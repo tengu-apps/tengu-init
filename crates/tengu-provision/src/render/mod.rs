@@ -1,10 +1,8 @@
 //! Output renderers for installation manifests
 
 mod bash;
-mod cloud_init;
 
 pub use bash::BashRenderer;
-pub use cloud_init::CloudInitRenderer;
 
 use crate::Manifest;
 

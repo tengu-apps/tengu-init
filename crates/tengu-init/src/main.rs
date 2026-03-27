@@ -1,38 +1,32 @@
 //! Tengu Init - Server Provisioning
 //!
-//! Provisions a server with Tengu `PaaS` installed.
+//! Provisions a server with Tengu PaaS installed.
 //! - Default: connects to user@host via SSH and provisions
-//! - `--hetzner`: creates a Hetzner VPS first, then provisions it
+//! - `--hetzner`: creates a Hetzner VPS first, then provisions via SSH
 
 mod providers;
 
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::Duration;
-use std::{env, fs, thread};
+use std::process::Command;
+use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL_CONDENSED};
 use console::{Emoji, style};
 use dialoguer::{Input, Password};
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use tengu_provision::{BashRenderer, CloudInitRenderer, Manifest, Renderer, TenguConfig};
-use tera::Tera;
+use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig};
 
-use providers::{Baremetal, Hetzner, TunnelConfig, hetzner::ServerParams};
+use providers::{Hetzner, SshProvider, TunnelConfig, hetzner::ServerParams};
 
-static LOOKING_GLASS: Emoji<'_, '_> = Emoji("🔍 ", "");
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static SPARKLE: Emoji<'_, '_> = Emoji("✨ ", "");
-static CHECK: Emoji<'_, '_> = Emoji("✅ ", "✓ ");
-static GEAR: Emoji<'_, '_> = Emoji("⚙️  ", "");
 static FOLDER: Emoji<'_, '_> = Emoji("📁 ", "");
+static CHECK: Emoji<'_, '_> = Emoji("✅ ", "✓ ");
 
-const TEMPLATE: &str = include_str!("../templates/cloud-init.yml.tera");
 const DEFAULT_RELEASE: &str = "v0.1.0-22879bf";
+const SSH_KEY_NAME: &str = "tengu-init";
 
 /// Configuration file structure
 /// Path: ~/.config/tengu/init.toml (XDG-style, same as main tengu config)
@@ -60,6 +54,8 @@ struct ServerConfig {
     location: Option<String>,
     image: Option<String>,
     release: Option<String>,
+    /// Admin username for Tengu (default: tengu)
+    admin_user: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -93,7 +89,7 @@ struct NotificationsConfig {
 #[command(
     name = "tengu-init",
     version,
-    about = "Provision Tengu PaaS on cloud or baremetal servers"
+    about = "Provision Tengu PaaS servers via SSH"
 )]
 struct Args {
     #[command(subcommand)]
@@ -151,6 +147,10 @@ struct Args {
     #[arg(long)]
     release: Option<String>,
 
+    /// Admin username for Tengu (default: tengu)
+    #[arg(long, short = 'u')]
+    user: Option<String>,
+
     /// Config file path
     #[arg(short, long)]
     config: Option<PathBuf>,
@@ -187,28 +187,13 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Show generated provisioning config
-    Show(ShowArgs),
-}
-
-#[derive(Parser, Debug)]
-struct ShowArgs {
-    /// Output format
-    #[arg(value_enum)]
-    format: OutputFormat,
-}
-
-/// Output format for show command
-#[derive(ValueEnum, Clone, Debug)]
-enum OutputFormat {
-    /// Cloud-init YAML format
-    CloudInit,
-    /// Executable bash script
-    Bash,
+    /// Show generated provisioning script
+    Show,
 }
 
 /// Resolved provisioning configuration (all credentials present)
 struct ResolvedConfig {
+    admin_user: String,
     domain_platform: String,
     domain_apps: String,
     cf_api_key: String,
@@ -465,7 +450,24 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
+    // 10. Admin username
+    let admin_user = args
+        .user
+        .clone()
+        .or_else(|| config.server.admin_user.clone())
+        .map_or_else(
+            || {
+                Input::<String>::new()
+                    .with_prompt("Admin username")
+                    .default("tengu".into())
+                    .interact_text()
+                    .context("Failed to read admin username")
+            },
+            Ok,
+        )?;
+
     Ok(ResolvedConfig {
+        admin_user,
         domain_platform,
         domain_apps,
         cf_api_key,
@@ -520,9 +522,9 @@ fn main() -> Result<()> {
     }
 
     // Route show subcommand
-    if let Some(Commands::Show(show_args)) = &args.command {
+    if let Some(Commands::Show) = &args.command {
         let file_config = load_config(args.config.as_ref())?;
-        return run_show(show_args, &file_config);
+        return run_show(&file_config);
     }
 
     // Validate: need either host or --hetzner
@@ -578,11 +580,11 @@ fn main() -> Result<()> {
         }
 
         if args.script_only {
-            println!("{}", Baremetal::generate_removal_script());
+            println!("{}", SshProvider::generate_removal_script());
             return Ok(());
         }
 
-        let provider = Baremetal::new(host, args.port);
+        let provider = SshProvider::new(host, args.port);
         provider.remove()?;
 
         return Ok(());
@@ -594,17 +596,42 @@ fn main() -> Result<()> {
     // Resolve config (CLI > env > config > interactive > defaults)
     let resolved = resolve_config(&args, &file_config)?;
 
-    // Determine the SSH host
-    let host = if args.hetzner {
-        // Hetzner flow: create server first, get IP
-        let hetzner_params = resolve_hetzner_params(&args, &file_config);
+    // Build TenguConfig for provisioning
+    let tengu_config = TenguConfig::builder()
+        .user(&resolved.admin_user)
+        .domain_platform(&resolved.domain_platform)
+        .domain_apps(&resolved.domain_apps)
+        .cf_api_key(&resolved.cf_api_key)
+        .cf_email(&resolved.cf_email)
+        .resend_api_key(&resolved.resend_api_key)
+        .notify_email(&resolved.notify_email)
+        .ssh_keys(
+            if resolved.ssh_key.is_empty() {
+                vec![]
+            } else {
+                vec![resolved.ssh_key.clone()]
+            },
+        )
+        .release(&resolved.release)
+        .build();
 
-        print_banner();
+    // Script-only mode (only for direct SSH)
+    if args.script_only && !args.hetzner {
+        let script = SshProvider::generate_script(&tengu_config)?;
+        println!("{script}");
+        return Ok(());
+    }
+
+    // Print banner
+    print_banner();
+
+    // Determine the host - either from args or create via Hetzner
+    let (host, created_server) = if args.hetzner {
+        let hetzner_params = resolve_hetzner_params(&args, &file_config);
         print_hetzner_config_table(&resolved, &hetzner_params)?;
 
         if args.dry_run {
             println!("\n{} Dry run - not creating server", style("i").cyan());
-            print_cloud_init_preview(&resolved)?;
             return Ok(());
         }
 
@@ -631,25 +658,20 @@ fn main() -> Result<()> {
             Hetzner::delete_server(&hetzner_params.name)?;
         }
 
-        // Generate cloud-init
-        println!("\n{GEAR} Generating cloud-init configuration...");
-        let cloud_init = render_cloud_init(&resolved)?;
+        // Ensure SSH key exists in Hetzner
+        if !Hetzner::ssh_key_exists(SSH_KEY_NAME)? {
+            println!("{} Creating SSH key in Hetzner...", style("*").cyan());
+            Hetzner::create_ssh_key(SSH_KEY_NAME, &resolved.ssh_key)?;
+        }
 
-        // Write to temp file
-        let temp_file = tempfile::Builder::new()
-            .prefix("cloud-init-")
-            .suffix(".yml")
-            .tempfile()?;
-        std::fs::write(temp_file.path(), &cloud_init)?;
-
-        // Create server
+        // Create server (plain Ubuntu with SSH key)
         println!("\n{ROCKET} Creating server...");
         let params = ServerParams {
             name: &hetzner_params.name,
             server_type: &hetzner_params.server_type,
             image: &hetzner_params.image,
             location: &hetzner_params.location,
-            cloud_init_path: temp_file.path(),
+            ssh_key_name: SSH_KEY_NAME,
         };
         let ip = Hetzner::create_server(&params)?;
 
@@ -658,62 +680,18 @@ fn main() -> Result<()> {
         // Remove old host key
         Hetzner::clear_host_key(&ip);
 
-        // Wait for SSH
-        wait_for_ssh(&ip);
-
-        // Stream cloud-init progress
-        stream_cloud_init_logs(&ip)?;
-
-        // Print success
-        print_success(&resolved, &ip);
-
-        return Ok(());
+        // Host is root@ip (Hetzner default)
+        (format!("root@{ip}"), true)
     } else {
-        // Direct SSH host provided
-        args.host.clone().unwrap()
+        print_provision_config_table(&resolved);
+
+        if args.dry_run {
+            println!("\n{} Dry run - not provisioning", style("i").cyan());
+            return Ok(());
+        }
+
+        (args.host.clone().unwrap(), false)
     };
-
-    // Extract user from host
-    let user = if let Some((u, _)) = host.split_once('@') {
-        u.to_string()
-    } else {
-        "chi".to_string()
-    };
-
-    // Build TenguConfig for baremetal provisioning
-    let tengu_config = TenguConfig::builder()
-        .user(user)
-        .domain_platform(&resolved.domain_platform)
-        .domain_apps(&resolved.domain_apps)
-        .cf_api_key(&resolved.cf_api_key)
-        .cf_email(&resolved.cf_email)
-        .resend_api_key(&resolved.resend_api_key)
-        .notify_email(&resolved.notify_email)
-        .ssh_keys(
-            if resolved.ssh_key.is_empty() {
-                vec![]
-            } else {
-                vec![resolved.ssh_key.clone()]
-            },
-        )
-        .release(&resolved.release)
-        .build();
-
-    // Script-only mode
-    if args.script_only {
-        let script = Baremetal::generate_script(&tengu_config)?;
-        println!("{script}");
-        return Ok(());
-    }
-
-    // Print banner
-    print_banner();
-    print_provision_config_table(&resolved);
-
-    if args.dry_run {
-        println!("\n{} Dry run - not provisioning", style("i").cyan());
-        return Ok(());
-    }
 
     println!(
         "\n{} Provisioning {} via SSH\n",
@@ -722,7 +700,7 @@ fn main() -> Result<()> {
     );
 
     // Create provider and provision
-    let provider = Baremetal::new(&host, args.port);
+    let provider = SshProvider::new(&host, args.port);
     provider.provision(&tengu_config)?;
 
     // Set up Cloudflare Tunnel
@@ -733,21 +711,25 @@ fn main() -> Result<()> {
     provider.setup_tunnel(&tunnel_config)?;
 
     // Print success
-    print_baremetal_success(&tengu_config);
+    if created_server {
+        print_success(&resolved);
+    } else {
+        print_provision_success(&tengu_config);
+    }
 
     Ok(())
 }
 
-/// Run show command
-fn run_show(args: &ShowArgs, config: &Config) -> Result<()> {
+/// Run show command - displays the generated provisioning script
+fn run_show(config: &Config) -> Result<()> {
     // Create a default TenguConfig from file config
     let tengu_config = TenguConfig::builder()
         .user(
             config
                 .server
-                .name
+                .admin_user
                 .clone()
-                .unwrap_or_else(|| "chi".to_string()),
+                .unwrap_or_else(|| "tengu".to_string()),
         )
         .domain_platform(
             config
@@ -809,27 +791,17 @@ fn run_show(args: &ShowArgs, config: &Config) -> Result<()> {
         .build();
 
     let manifest = Manifest::tengu(&tengu_config);
-
-    match args.format {
-        OutputFormat::CloudInit => {
-            let renderer = CloudInitRenderer::new();
-            let yaml = renderer.render_with_config(&manifest, &tengu_config)?;
-            println!("{yaml}");
-        }
-        OutputFormat::Bash => {
-            let renderer = BashRenderer::new().verbose(true).color(true);
-            let script = renderer
-                .render(&manifest)
-                .map_err(|e| anyhow::anyhow!("Failed to render bash script: {e:?}"))?;
-            println!("{script}");
-        }
-    }
+    let renderer = BashRenderer::new().verbose(true).color(true);
+    let script = renderer
+        .render(&manifest)
+        .map_err(|e| anyhow::anyhow!("Failed to render bash script: {e:?}"))?;
+    println!("{script}");
 
     Ok(())
 }
 
-/// Print success for baremetal provisioning
-fn print_baremetal_success(config: &TenguConfig) {
+/// Print success for SSH provisioning
+fn print_provision_success(config: &TenguConfig) {
     println!();
     println!(
         "{}",
@@ -915,6 +887,7 @@ fn print_hetzner_config_table(cfg: &ResolvedConfig, hetzner: &HetznerParams) -> 
     ]);
     table.add_row(vec!["Location", &hetzner.location]);
     table.add_row(vec!["Image", &hetzner.image]);
+    table.add_row(vec!["Admin User", &cfg.admin_user]);
     table.add_row(vec!["Cloudflare", &cfg.cf_email]);
     table.add_row(vec![
         "Resend",
@@ -944,6 +917,7 @@ fn print_provision_config_table(cfg: &ResolvedConfig) {
         Cell::new("Value").fg(Color::Cyan),
     ]);
 
+    table.add_row(vec!["Admin User", &cfg.admin_user]);
     table.add_row(vec!["Cloudflare", &cfg.cf_email]);
     table.add_row(vec![
         "Resend",
@@ -961,124 +935,7 @@ fn print_provision_config_table(cfg: &ResolvedConfig) {
     println!("{table}");
 }
 
-fn render_cloud_init(cfg: &ResolvedConfig) -> Result<String> {
-    let mut tera = Tera::default();
-    tera.add_raw_template("cloud-init", TEMPLATE)?;
-
-    let mut context = tera::Context::new();
-    context.insert("domain_platform", &cfg.domain_platform);
-    context.insert("domain_apps", &cfg.domain_apps);
-    context.insert("domain_api", &format!("api.{}", cfg.domain_platform));
-    context.insert("domain_docs", &format!("docs.{}", cfg.domain_platform));
-    context.insert("domain_git", &format!("git.{}", cfg.domain_platform));
-    context.insert("domain_ssh", &format!("ssh.{}", cfg.domain_platform));
-    context.insert("cf_api_key", &cfg.cf_api_key);
-    context.insert("cf_email", &cfg.cf_email);
-    context.insert("resend_api_key", &cfg.resend_api_key);
-    context.insert("ssh_key", &cfg.ssh_key);
-    context.insert("notify_email", &cfg.notify_email);
-    context.insert("tengu_release", &cfg.release);
-
-    tera.render("cloud-init", &context)
-        .context("Failed to render cloud-init template")
-}
-
-fn print_cloud_init_preview(cfg: &ResolvedConfig) -> Result<()> {
-    let content = render_cloud_init(cfg)?;
-    println!("\n{LOOKING_GLASS} Cloud-init preview:\n");
-    // Show first 50 lines
-    for line in content.lines().take(50) {
-        println!("  {}", style(line).dim());
-    }
-    println!("  {}", style("... (truncated)").dim());
-    Ok(())
-}
-
-fn wait_for_ssh(ip: &str) {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.set_message("Waiting for SSH...");
-    spinner.enable_steady_tick(Duration::from_millis(100));
-
-    loop {
-        let status = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "BatchMode=yes",
-                &format!("chi@{ip}"),
-                "true",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-
-        if status.map(|s| s.success()).unwrap_or(false) {
-            break;
-        }
-        thread::sleep(Duration::from_secs(3));
-    }
-
-    spinner.finish_with_message(format!("{CHECK} SSH ready"));
-}
-
-fn stream_cloud_init_logs(ip: &str) -> Result<()> {
-    println!("\n{}", style("-".repeat(50)).dim());
-    println!("{} Cloud-init progress:\n", style("v").cyan());
-
-    let mut child = Command::new("ssh")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            &format!("chi@{ip}"),
-            "while [ ! -f /var/log/cloud-init-output.log ]; do sleep 1; done; \
-             tail -f /var/log/cloud-init-output.log 2>/dev/null & PID=$!; \
-             cloud-init status --wait >/dev/null 2>&1; \
-             sleep 2; kill $PID 2>/dev/null",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Failed to stream logs")?;
-
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            // Filter out noise, show key progress
-            if line.contains("Setting up")
-                || line.contains("Unpacking")
-                || line.contains("Created symlink")
-                || line.contains("enabled")
-                || line.contains("Processing")
-                || line.contains("tengu")
-                || line.contains("Tengu")
-            {
-                println!("  {}", style(&line).dim());
-            }
-        }
-    }
-
-    let _ = child.wait();
-    println!("\n{}", style("-".repeat(50)).dim());
-    Ok(())
-}
-
-fn print_success(cfg: &ResolvedConfig, _ip: &str) {
+fn print_success(cfg: &ResolvedConfig) {
     println!();
     println!(
         "{}",
@@ -1105,7 +962,7 @@ fn print_success(cfg: &ResolvedConfig, _ip: &str) {
 
     table.add_row(vec![
         Cell::new("SSH").fg(Color::Cyan),
-        Cell::new(format!("ssh chi@ssh.{}", cfg.domain_platform)),
+        Cell::new(format!("ssh {}@ssh.{}", cfg.admin_user, cfg.domain_platform)),
     ]);
     table.add_row(vec![
         Cell::new("API").fg(Color::Cyan),

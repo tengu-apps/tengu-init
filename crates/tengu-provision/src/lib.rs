@@ -1,13 +1,13 @@
 //! Tengu Provision - Installation Step Library
 //!
 //! This crate provides types and traits for defining idempotent installation steps
-//! that can be rendered to either cloud-init YAML or executable bash scripts.
+//! that can be rendered to executable bash scripts.
 //!
 //! # Architecture
 //!
 //! - [`Step`] trait: Common interface for all installation steps
 //! - [`steps`] module: Concrete step implementations (packages, users, files, etc.)
-//! - [`render`] module: Output renderers (cloud-init, bash)
+//! - [`render`] module: Output renderers (bash)
 //! - [`Manifest`]: Complete installation manifest combining multiple steps
 //! - [`Config`]: Configuration types for Tengu installation
 //!
@@ -17,7 +17,7 @@
 //! use tengu_provision::{Manifest, TenguConfig, BashRenderer};
 //!
 //! let config = TenguConfig::builder()
-//!     .user("chi")
+//!     .user("tengu")
 //!     .domain_platform("tengu.to")
 //!     .build();
 //!
@@ -33,7 +33,7 @@ pub mod steps;
 
 pub use config::TenguConfig;
 pub use manifest::Manifest;
-pub use render::{BashRenderer, CloudInitRenderer, Renderer};
+pub use render::{BashRenderer, Renderer};
 pub use steps::Step;
 
 #[cfg(test)]
@@ -182,19 +182,4 @@ mod tests {
         assert!(!script.contains("GREEN="));
     }
 
-    #[test]
-    fn test_cloud_init_renderer() {
-        let config = TenguConfig::test_config();
-        let manifest = Manifest::tengu(&config);
-        let renderer = CloudInitRenderer::new();
-
-        let yaml = renderer.render_with_config(&manifest, &config).unwrap();
-
-        // Should start with cloud-config marker
-        assert!(yaml.starts_with("#cloud-config"));
-        // Should have user
-        assert!(yaml.contains("testuser"));
-        // Should have packages
-        assert!(yaml.contains("packages:"));
-    }
 }

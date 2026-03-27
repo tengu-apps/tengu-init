@@ -1,4 +1,4 @@
-//! Baremetal provider - provision via SSH
+//! SSH provider - provision servers via SSH
 //!
 //! Connects to an existing server via SSH, uploads a bash script,
 //! and executes it with real-time progress streaming.
@@ -21,18 +21,18 @@ pub struct TunnelConfig {
     pub tunnel_name: String,
 }
 
-/// Baremetal server provisioning via SSH
-pub struct Baremetal {
+/// Server provisioning via SSH
+pub struct SshProvider {
     /// SSH host
     pub host: String,
-    /// SSH user (must have passwordless sudo access)
+    /// SSH user (must have sudo access)
     pub user: String,
     /// SSH port
     pub port: u16,
 }
 
-impl Baremetal {
-    /// Create a new baremetal provider from a host specification
+impl SshProvider {
+    /// Create a new SSH provider from a host specification
     ///
     /// Host can be:
     /// - `hostname` (uses current username)
@@ -379,15 +379,23 @@ echo ""
         self.upload_file_content(&cert_content, &format!("{cf_dir}/cert.pem"))?;
         println!("  {} cert.pem uploaded", style("v").green());
 
-        // Step 3: Delete existing tunnel
+        // Step 3: Clean up any previous tunnel installation
         println!(
             "{} Configuring tunnel '{}'...",
             style("*").cyan(),
             tunnel_config.tunnel_name
         );
+        // Remove old systemd service and /etc/cloudflared if present
+        self.run_ssh_command(
+            "sudo systemctl stop cloudflared 2>/dev/null || true; \
+             sudo systemctl disable cloudflared 2>/dev/null || true; \
+             sudo cloudflared service uninstall 2>/dev/null || true; \
+             sudo rm -rf /etc/cloudflared",
+        )?;
         self.run_ssh_command(&format!(
-            "cloudflared tunnel delete {} 2>/dev/null || true",
-            tunnel_config.tunnel_name
+            "cloudflared tunnel cleanup {} 2>/dev/null || true; \
+             cloudflared tunnel delete {} 2>/dev/null || true",
+            tunnel_config.tunnel_name, tunnel_config.tunnel_name
         ))?;
 
         // Step 4: Create tunnel and capture ID
@@ -420,7 +428,7 @@ echo ""
         self.upload_file_content(&config_yml, &format!("{cf_dir}/config.yml"))?;
         println!("  {} config.yml written", style("v").green());
 
-        // Step 6: Create DNS routes
+        // Step 6: Create DNS routes (delete stale records first)
         println!(
             "{} Creating DNS routes...",
             style("*").cyan()
@@ -428,7 +436,7 @@ echo ""
         for subdomain in &["api", "docs", "git", "ssh"] {
             let hostname = format!("{subdomain}.{}", tunnel_config.domain_platform);
             self.run_ssh_command(&format!(
-                "cloudflared tunnel route dns {} {}",
+                "cloudflared tunnel route dns --overwrite-dns {} {}",
                 tunnel_config.tunnel_name, hostname
             ))?;
             println!("  {} {}", style("v").green(), hostname);

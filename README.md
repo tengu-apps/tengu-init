@@ -109,6 +109,7 @@ type = "cax41"        # ARM64, 16 vCPU, 32GB RAM
 location = "hel1"     # Helsinki
 image = "ubuntu-24.04"
 release = "v0.1.0"    # Tengu release tag
+admin_user = "tengu"  # Admin username (default: tengu)
 
 [domains]
 platform = "tengu.to"
@@ -150,7 +151,8 @@ tengu-init chi@server \
   --domain-apps tengu.host \
   --ssh-key "ssh-ed25519 AAAA..." \
   --notify-email admin@example.com \
-  --release v0.1.0
+  --release v0.1.0 \
+  --user tengu
 ```
 
 ## Server Types
