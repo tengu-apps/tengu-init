@@ -18,8 +18,8 @@
 
 ## Features
 
-- **Hetzner Cloud** - Automatic VM provisioning via cloud-init
-- **Baremetal** - SSH-based provisioning for existing servers
+- **Hetzner Cloud** - Automatic VM provisioning with SSH-based setup
+- **SSH Provisioning** - Provision any server via SSH
 - **Removal** - Clean uninstall of Tengu and all dependencies
 - **Idempotent** - Safe to re-run, only applies needed changes
 - **Interactive** - Prompts for missing credentials with config file and env var support
@@ -27,6 +27,12 @@
 
 ## Install
 
+**Homebrew (macOS/Linux):**
+```bash
+brew install tengu-apps/tap/tengu-init
+```
+
+**Shell script:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tengu-apps/tengu-init/master/install.sh | sh
 ```
@@ -35,7 +41,7 @@ Or download binaries directly from [releases](https://github.com/tengu-apps/teng
 
 ## Usage
 
-### Baremetal / Existing Server
+### Existing Server
 
 ```bash
 # Provision existing server via SSH (interactive credential prompts)
