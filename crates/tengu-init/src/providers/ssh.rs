@@ -340,10 +340,19 @@ echo ""
         );
         self.upload_script(&script)?;
 
-        // Execute script
+        // Execute script (retry once if it fails — services may need time to start)
         println!("{} Executing provisioning script...\n", style("*").cyan());
         println!("{}", style("-".repeat(50)).dim());
-        self.execute_script(total_steps)?;
+        if let Err(e) = self.execute_script(total_steps) {
+            println!("{}", style("-".repeat(50)).dim());
+            println!(
+                "\n{} First run failed ({}), retrying (script is idempotent)...\n",
+                style("!").yellow(),
+                e
+            );
+            println!("{}", style("-".repeat(50)).dim());
+            self.execute_script(total_steps)?;
+        }
         println!("{}", style("-".repeat(50)).dim());
 
         // Cleanup
@@ -364,7 +373,11 @@ echo ""
     /// 6. Create DNS CNAME routes for subdomains
     /// 7. Install and start cloudflared as a systemd service
     pub fn setup_tunnel(&self, tunnel_config: &TunnelConfig) -> Result<()> {
-        let home = format!("/home/{}", self.user);
+        let home = if self.user == "root" {
+            "/root".to_string()
+        } else {
+            format!("/home/{}", self.user)
+        };
         let cf_dir = format!("{home}/.cloudflared");
 
         // Step 1: Install cloudflared
