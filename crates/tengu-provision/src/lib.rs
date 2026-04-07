@@ -150,6 +150,10 @@ mod tests {
                 .iter()
                 .any(|d| d.contains("firewall") || d.contains("Firewall"))
         );
+        // sshd configuration
+        assert!(descriptions.iter().any(|d| d.contains("sshd_config")));
+        // tengu user shell
+        assert!(descriptions.iter().any(|d| d.contains("/bin/bash")));
     }
 
     #[test]

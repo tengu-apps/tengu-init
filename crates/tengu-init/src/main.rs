@@ -107,6 +107,10 @@ struct Args {
     #[arg(short, long, default_value = "22")]
     port: u16,
 
+    /// Skip confirmation prompt
+    #[arg(long, short = 'y')]
+    yes: bool,
+
     /// Generate script only, don't execute
     #[arg(long)]
     script_only: bool,
@@ -158,6 +162,10 @@ struct Args {
     /// Enable UFW firewall configuration
     #[arg(long)]
     ufw: bool,
+
+    /// Path to local tengu .deb package (skips download)
+    #[arg(long)]
+    deb_path: Option<PathBuf>,
 
     /// Show config file path and exit
     #[arg(long)]
@@ -618,6 +626,7 @@ fn main() -> Result<()> {
         )
         .release(&resolved.release)
         .enable_ufw(args.ufw)
+        .deb_path(args.deb_path.as_ref().map(|p| p.display().to_string()))
         .build();
 
     // Script-only mode (only for direct SSH)
@@ -634,6 +643,21 @@ fn main() -> Result<()> {
     let (host, created_server) = if args.hetzner {
         let hetzner_params = resolve_hetzner_params(&args, &file_config);
         print_hetzner_config_table(&resolved, &hetzner_params)?;
+
+        if !args.yes && !args.dry_run {
+            let confirm = dialoguer::Confirm::new()
+                .with_prompt(format!(
+                    "Provision server {}? This will install Tengu PaaS and all dependencies",
+                    hetzner_params.name
+                ))
+                .default(false)
+                .interact()?;
+
+            if !confirm {
+                println!("Aborted.");
+                return Ok(());
+            }
+        }
 
         if args.dry_run {
             println!("\n{} Dry run - not creating server", style("i").cyan());
@@ -689,6 +713,21 @@ fn main() -> Result<()> {
         (format!("root@{ip}"), true)
     } else {
         print_provision_config_table(&resolved);
+
+        if !args.yes && !args.dry_run {
+            let host_display = args.host.as_deref().unwrap_or("unknown");
+            let confirm = dialoguer::Confirm::new()
+                .with_prompt(format!(
+                    "Provision server {host_display}? This will install Tengu PaaS and all dependencies"
+                ))
+                .default(false)
+                .interact()?;
+
+            if !confirm {
+                println!("Aborted.");
+                return Ok(());
+            }
+        }
 
         if args.dry_run {
             println!("\n{} Dry run - not provisioning", style("i").cyan());

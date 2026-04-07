@@ -23,6 +23,8 @@ pub struct TenguConfig {
     pub release: String,
     /// Enable UFW firewall configuration
     pub enable_ufw: bool,
+    /// Path to local .deb package (skips download when set)
+    pub deb_path: Option<String>,
 }
 
 impl TenguConfig {
@@ -135,7 +137,8 @@ git.{} {{
             notify_email: "notify@example.com".into(),
             ssh_keys: vec!["ssh-ed25519 AAAA... test@test".into()],
             release: "v0.1.0-test".into(),
-            enable_ufw: false,
+            enable_ufw: true,
+            deb_path: None,
         }
     }
 }
@@ -204,6 +207,12 @@ impl TenguConfigBuilder {
     /// Enable or disable UFW firewall configuration
     pub fn enable_ufw(mut self, enable: bool) -> Self {
         self.config.enable_ufw = enable;
+        self
+    }
+
+    /// Set local .deb path
+    pub fn deb_path(mut self, path: Option<String>) -> Self {
+        self.config.deb_path = path;
         self
     }
 

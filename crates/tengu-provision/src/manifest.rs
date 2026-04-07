@@ -73,6 +73,7 @@ impl Manifest {
     /// - Tengu configuration files
     /// - Firewall rules
     /// - Tengu .deb package installation
+    /// - OpenSSH configuration for git operations
     #[allow(clippy::too_many_lines)]
     pub fn tengu(config: &TenguConfig) -> Self {
         let mut manifest = Self::new("tengu")
@@ -128,7 +129,13 @@ impl Manifest {
         // =========================================================
         // Phase 5: Ollama
         // =========================================================
-        manifest.add_step(InstallDebFromUrl::ollama());
+        manifest.add_step(
+            RunCommand::new(
+                "Install Ollama",
+                "bash -c 'set +e; curl -fsSL https://ollama.com/install.sh | sh; exit 0'",
+            )
+            .unless("command -v ollama >/dev/null 2>&1"),
+        );
 
         // =========================================================
         // Phase 6: tengu-caddy (Caddy with Cloudflare DNS plugin)
@@ -250,12 +257,84 @@ impl Manifest {
         // =========================================================
         // Phase 11: Install Tengu .deb Package
         // =========================================================
-        let tengu_deb_url =
-            "https://github.com/tengu-apps/tengu-deb/releases/latest/download/tengu_0.1.0-1_{arch}.deb";
-        manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
+        if config.deb_path.is_some() {
+            // Local .deb was SCP'd to /tmp/tengu-local.deb before provisioning
+            manifest.add_step(RunCommand::new(
+                "Install tengu from local .deb",
+                "DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/tengu-local.deb || apt-get install -f -y",
+            ));
+        } else {
+            let tengu_deb_url =
+                "https://github.com/tengu-apps/tengu-deb/releases/latest/download/tengu_0.1.0-1_{arch}.deb";
+            manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
+        }
 
         // Enable and start tengu service
         manifest.add_step(EnsureService::new("tengu"));
+
+        // Set tengu user shell to /bin/bash — tengu is a normal user and
+        // the setup SSH key can log in directly. The command= prefix in
+        // authorized_keys handles git key restriction.
+        manifest.add_step(
+            RunCommand::new(
+                "Set tengu user shell to /bin/bash",
+                "usermod -s /bin/bash tengu",
+            )
+            .unless(
+                r"getent passwd tengu | grep -q '/bin/bash'",
+            ),
+        );
+
+        // Place the setup SSH key into tengu's authorized_keys for direct login.
+        // The .deb creates the tengu user but doesn't set up SSH access.
+        // This key gives the admin full shell access (no command= prefix).
+        if !config.ssh_keys.is_empty() {
+            let key_cmds: Vec<String> = config.ssh_keys.iter().map(|key| {
+                let key_escaped = key.replace('\'', "'\\''");
+                format!(
+                    "grep -qF '{key_escaped}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
+                     echo '{key_escaped}' >> /home/tengu/.ssh/authorized_keys"
+                )
+            }).collect();
+
+            let mut bash = String::from(
+                "mkdir -p /home/tengu/.ssh && chmod 700 /home/tengu/.ssh && "
+            );
+            bash.push_str(&key_cmds.join(" && "));
+            bash.push_str(
+                " && chmod 600 /home/tengu/.ssh/authorized_keys && chown -R tengu:tengu /home/tengu/.ssh"
+            );
+
+            manifest.add_step(
+                RunCommand::new(
+                    "Add setup SSH key to tengu authorized_keys",
+                    &bash,
+                )
+            );
+        }
+
+        // =========================================================
+        // Phase 11a: OpenSSH Configuration for Git Operations
+        // =========================================================
+
+        // Write sshd drop-in config for tengu user
+        manifest.add_step(
+            WriteFile::new(
+                "/etc/ssh/sshd_config.d/tengu.conf",
+                "Match User tengu\n    \
+                 AuthorizedKeysCommand /usr/bin/tengu auth-keys %t %k\n    \
+                 AuthorizedKeysCommandUser root\n",
+            )
+            .with_permissions("0644")
+            .with_owner("root:root"),
+        );
+
+        // Restart sshd to pick up the new configuration
+        // Ubuntu 24.04 uses ssh.service, older versions use sshd.service
+        manifest.add_step(RunCommand::new(
+            "Restart SSH service for tengu config",
+            "systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true",
+        ));
 
         // =========================================================
         // Phase 12: Post-Install Setup

@@ -322,6 +322,16 @@ echo ""
         // Wait for SSH
         self.wait_for_ssh()?;
 
+        // Upload local .deb if specified
+        if let Some(deb_path) = &config.deb_path {
+            println!(
+                "{} Uploading local .deb package...",
+                style("*").cyan()
+            );
+            self.scp_file(deb_path, "/tmp/tengu-local.deb")?;
+            println!("  {} .deb uploaded", style("v").green());
+        }
+
         // Upload script
         println!(
             "{} Uploading script to {}...",
@@ -439,7 +449,7 @@ echo ""
              \x20 - hostname: git.{domain}\n\
              \x20   service: http://localhost:8080\n\
              \x20 - hostname: ssh.{domain}\n\
-             \x20   service: ssh://localhost:2222\n\
+             \x20   service: ssh://localhost:22\n\
              \x20 - service: http_status:404\n",
             domain = tunnel_config.domain_platform,
         );
@@ -567,6 +577,28 @@ echo ""
             "-p".into(),
             self.port.to_string(),
         ]
+    }
+
+    /// Copy a local file to the remote server via SCP
+    fn scp_file(&self, local_path: &str, remote_path: &str) -> Result<()> {
+        let dest = format!("{}:{}", self.ssh_destination(), remote_path);
+        let output = Command::new("scp")
+            .args([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-P", &self.port.to_string(),
+                local_path,
+                &dest,
+            ])
+            .output()
+            .context("Failed to run scp")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("SCP failed: {stderr}");
+        }
+        Ok(())
     }
 
     /// Wait for SSH to become available
