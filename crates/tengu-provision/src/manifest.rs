@@ -270,7 +270,7 @@ impl Manifest {
             ));
         } else {
             let tengu_deb_url =
-                "https://github.com/tengu-apps/tengu-deb/releases/latest/download/tengu_0.1.0-1_{arch}.deb";
+                "https://github.com/tengu-apps/tengu-deb/releases/download/current/tengu_{arch}.deb";
             manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
         }
 
