@@ -290,9 +290,9 @@ impl Manifest {
             ),
         );
 
-        // Place the setup SSH key into tengu's authorized_keys with git-shell-cmd restriction.
+        // Place the setup SSH key into tengu's authorized_keys with git-shell restriction.
         // All tengu user access goes through the git shell command — admin uses root SSH.
-        // Format: command="/usr/bin/tengu git-shell-cmd <username>",restrict <key>
+        // Format: command="/usr/bin/tengu git-shell <username>",restrict <key>
         if !config.ssh_keys.is_empty() {
             let key_cmds: Vec<String> = config.ssh_keys.iter().map(|key| {
                 let key_escaped = key.replace('\'', "'\\''");
@@ -301,12 +301,12 @@ impl Manifest {
                     .and_then(|c| c.split('@').next())
                     .unwrap_or("admin");
                 let entry = format!(
-                    "command=\"/usr/bin/tengu git-shell-cmd {username}\",restrict {key_escaped}"
+                    "command=\"/usr/bin/tengu git-shell {username}\",restrict {key_escaped}"
                 );
                 // Remove any bare key (Hetzner cloud-init injects it) then add with command= restriction
                 format!(
                     "sed -i '/^ssh-.*{key_short}/d' /home/tengu/.ssh/authorized_keys 2>/dev/null; \
-                     grep -qF 'git-shell-cmd' /home/tengu/.ssh/authorized_keys 2>/dev/null && \
+                     grep -qF 'git-shell' /home/tengu/.ssh/authorized_keys 2>/dev/null && \
                      grep -qF '{key_short}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
                      echo '{entry}' >> /home/tengu/.ssh/authorized_keys",
                     key_short = key.split_whitespace().nth(1).unwrap_or(""),
