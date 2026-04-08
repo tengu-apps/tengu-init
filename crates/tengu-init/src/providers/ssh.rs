@@ -340,10 +340,19 @@ echo ""
         );
         self.upload_script(&script)?;
 
-        // Execute script (no retry — apt lock preamble and service retries handle transients)
+        // Execute script — retry once on failure (fresh VMs have timing issues with service starts)
         println!("{} Executing provisioning script...\n", style("*").cyan());
         println!("{}", style("-".repeat(50)).dim());
-        self.execute_script(total_steps)?;
+        if let Err(e) = self.execute_script(total_steps) {
+            println!("{}", style("-".repeat(50)).dim());
+            println!(
+                "\n{} First run failed ({}), retrying (script is idempotent)...\n",
+                style("!").yellow().bold(),
+                style(&e).dim()
+            );
+            println!("{}", style("-".repeat(50)).dim());
+            self.execute_script(total_steps)?;
+        }
         println!("{}", style("-".repeat(50)).dim());
 
         // Cleanup
