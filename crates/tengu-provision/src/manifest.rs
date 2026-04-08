@@ -290,15 +290,22 @@ impl Manifest {
             ),
         );
 
-        // Place the setup SSH key into tengu's authorized_keys for direct login.
-        // The .deb creates the tengu user but doesn't set up SSH access.
-        // This key gives the admin full shell access (no command= prefix).
+        // Place the setup SSH key into tengu's authorized_keys with git-shell-cmd restriction.
+        // All tengu user access goes through the git shell command — admin uses root SSH.
+        // Format: command="/usr/bin/tengu git-shell-cmd <username>",restrict <key>
         if !config.ssh_keys.is_empty() {
             let key_cmds: Vec<String> = config.ssh_keys.iter().map(|key| {
                 let key_escaped = key.replace('\'', "'\\''");
+                // Extract username from key comment (last field, e.g. "chi@junkpile" → "chi")
+                let username = key.split_whitespace().last()
+                    .and_then(|c| c.split('@').next())
+                    .unwrap_or("admin");
+                let entry = format!(
+                    "command=\"/usr/bin/tengu git-shell-cmd {username}\",restrict {key_escaped}"
+                );
                 format!(
                     "grep -qF '{key_escaped}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
-                     echo '{key_escaped}' >> /home/tengu/.ssh/authorized_keys"
+                     echo '{entry}' >> /home/tengu/.ssh/authorized_keys"
                 )
             }).collect();
 
