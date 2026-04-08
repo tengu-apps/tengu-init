@@ -108,9 +108,12 @@ impl Step for InstallPackage {
             ));
         }
 
-        // Idempotent install + track
+        // Idempotent install + track (wait for apt lock first)
         cmds.push(format!(
-            "dpkg -s {name} 2>/dev/null | grep -q '^Status: install ok installed' || {{ apt-get install -y {name} && track_pkg {name}; }}",
+            "dpkg -s {name} 2>/dev/null | grep -q '^Status: install ok installed' || {{ \
+                while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; \
+                apt-get install -y {name} && track_pkg {name}; \
+            }}",
             name = self.name
         ));
 
