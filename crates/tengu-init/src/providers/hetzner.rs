@@ -129,6 +129,63 @@ impl Hetzner {
         Ok(())
     }
 
+    /// Find the Hetzner SSH key name that matches a given public key content.
+    /// Uses `hcloud ssh-key list` and compares fingerprints.
+    pub fn find_key_name_by_content(public_key: &str) -> Result<Option<String>> {
+        // Compute local fingerprint via ssh-keygen
+        let mut child = Command::new("ssh-keygen")
+            .args(["-l", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to run ssh-keygen")?;
+        if let Some(ref mut stdin) = child.stdin {
+            use std::io::Write;
+            let _ = stdin.write_all(public_key.as_bytes());
+        }
+        let output = child.wait_with_output()?;
+        let local_fp_line = String::from_utf8_lossy(&output.stdout);
+        // Format: "256 SHA256:xxx comment (ED25519)"  — extract the middle part after MD5 colon-hex
+        // hcloud uses MD5 fingerprint format (colon-separated hex)
+        let local_fp_output = Command::new("ssh-keygen")
+            .args(["-l", "-E", "md5", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn();
+        let local_md5 = if let Ok(mut child2) = local_fp_output {
+            if let Some(ref mut stdin) = child2.stdin {
+                use std::io::Write;
+                let _ = stdin.write_all(public_key.as_bytes());
+            }
+            let out2 = child2.wait_with_output()?;
+            let line = String::from_utf8_lossy(&out2.stdout).to_string();
+            // "256 MD5:xx:xx:xx... comment (ED25519)" — extract after "MD5:"
+            line.split_whitespace().nth(1).map(|s| s.replace("MD5:", "")).unwrap_or_default()
+        } else {
+            return Ok(None);
+        };
+
+        if local_md5.is_empty() {
+            return Ok(None);
+        }
+
+        // List all hcloud SSH keys and find matching fingerprint
+        let output = Command::new("hcloud")
+            .args(["ssh-key", "list", "-o", "columns=name,fingerprint"])
+            .output()
+            .context("Failed to list SSH keys")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().skip(1) {
+            // "NAME   FINGERPRINT"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1] == local_md5 {
+                return Ok(Some(parts[0].to_string()));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Create a new server, returns the IP address
     ///
     /// Creates a plain Ubuntu server with the specified SSH key.

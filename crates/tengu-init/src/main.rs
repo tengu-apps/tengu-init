@@ -691,12 +691,28 @@ fn main() -> Result<()> {
             Hetzner::delete_server(&hetzner_params.name)?;
         }
 
-        // Ensure SSH key in Hetzner matches current machine (ephemeral, safe to recreate)
+        // Ensure SSH key in Hetzner — try to create, fall back to finding existing
+        let ssh_key_name: String;
         if Hetzner::ssh_key_exists(SSH_KEY_NAME)? {
             Hetzner::delete_ssh_key(SSH_KEY_NAME)?;
         }
         println!("{} Creating SSH key in Hetzner...", style("*").cyan());
-        Hetzner::create_ssh_key(SSH_KEY_NAME, &resolved.ssh_key)?;
+        match Hetzner::create_ssh_key(SSH_KEY_NAME, &resolved.ssh_key) {
+            Ok(()) => {
+                ssh_key_name = SSH_KEY_NAME.to_string();
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("uniqueness_error") || msg.contains("not unique") {
+                    // Key content exists under another name — find it by fingerprint
+                    ssh_key_name = Hetzner::find_key_name_by_content(&resolved.ssh_key)?
+                        .unwrap_or_else(|| SSH_KEY_NAME.to_string());
+                    println!("  {} SSH key exists as '{}', reusing", style("*").dim(), ssh_key_name);
+                } else {
+                    return Err(e);
+                }
+            }
+        }
 
         // Create server (plain Ubuntu with SSH key)
         println!("\n{ROCKET} Creating server...");
@@ -705,7 +721,7 @@ fn main() -> Result<()> {
             server_type: &hetzner_params.server_type,
             image: &hetzner_params.image,
             location: &hetzner_params.location,
-            ssh_key_name: SSH_KEY_NAME,
+            ssh_key_name: &ssh_key_name,
         };
         let ip = Hetzner::create_server(&params)?;
 
