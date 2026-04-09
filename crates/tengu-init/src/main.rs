@@ -771,6 +771,7 @@ fn main() -> Result<()> {
     // Set up Cloudflare Tunnel
     let tunnel_config = TunnelConfig {
         domain_platform: resolved.domain_platform.clone(),
+        domain_apps: resolved.domain_apps.clone(),
         tunnel_name: "tengu".to_string(),
     };
     provider.setup_tunnel(&tunnel_config)?;

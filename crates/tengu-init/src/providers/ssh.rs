@@ -17,6 +17,8 @@ use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig};
 pub struct TunnelConfig {
     /// The platform domain (e.g., "tengu.to")
     pub domain_platform: String,
+    /// The apps domain (e.g., "tengu.host")
+    pub domain_apps: String,
     /// The tunnel name (e.g., "tengu")
     pub tunnel_name: String,
 }
@@ -455,16 +457,19 @@ echo ""
              credentials-file: {cf_dir}/{tunnel_id}.json\n\
              \n\
              ingress:\n\
-             \x20 - hostname: api.{domain}\n\
+             \x20 - hostname: api.{platform}\n\
              \x20   service: http://localhost:8080\n\
-             \x20 - hostname: docs.{domain}\n\
+             \x20 - hostname: docs.{platform}\n\
              \x20   service: http://localhost:8080\n\
-             \x20 - hostname: git.{domain}\n\
+             \x20 - hostname: git.{platform}\n\
              \x20   service: http://localhost:8080\n\
-             \x20 - hostname: ssh.{domain}\n\
+             \x20 - hostname: ssh.{platform}\n\
+             \x20   service: ssh://localhost:22\n\
+             \x20 - hostname: {apps}\n\
              \x20   service: ssh://localhost:22\n\
              \x20 - service: http_status:404\n",
-            domain = tunnel_config.domain_platform,
+            platform = tunnel_config.domain_platform,
+            apps = tunnel_config.domain_apps,
         );
         self.upload_file_content(&config_yml, &format!("{cf_dir}/config.yml"))?;
         println!("  {} config.yml written", style("v").green());
@@ -482,6 +487,13 @@ echo ""
             ))?;
             println!("  {} {}", style("v").green(), hostname);
         }
+        // SSH route on apps domain (bare domain)
+        let apps_ssh = &tunnel_config.domain_apps;
+        self.run_ssh_command(&format!(
+            "cloudflared tunnel route dns --overwrite-dns {} {}",
+            tunnel_config.tunnel_name, apps_ssh
+        ))?;
+        println!("  {} {}", style("v").green(), apps_ssh);
 
         // Step 7: Install systemd service and start
         println!(
