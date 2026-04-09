@@ -237,15 +237,21 @@ impl Manifest {
         // =========================================================
         // Phase 10: Enable and Start Services
         // =========================================================
-        // Settle after package installations — systemd needs to catch up
+        // Reload systemd to pick up any new/changed unit files from package installs
         manifest.add_step(RunCommand::new(
-            "Settle after package installs",
-            "systemctl daemon-reload && sleep 3",
+            "Reload systemd daemon",
+            "systemctl daemon-reload",
         ));
         // docker.service requires docker.socket for socket activation
         manifest.add_step(EnsureService::new("docker.socket"));
-        manifest.add_step(EnsureService::new("docker"));
-        manifest.add_step(EnsureService::new("postgresql"));
+        manifest.add_step(
+            EnsureService::new("docker")
+                .with_readiness_check("docker info >/dev/null 2>&1"),
+        );
+        manifest.add_step(
+            EnsureService::new("postgresql")
+                .with_readiness_check("pg_isready -q"),
+        );
         manifest.add_step(EnsureService::new("fail2ban"));
         manifest.add_step(EnsureService::new("caddy"));
 

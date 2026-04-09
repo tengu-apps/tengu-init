@@ -11,6 +11,11 @@ pub struct EnsureService {
     pub enabled: bool,
     /// Whether to start the service
     pub started: bool,
+    /// Optional readiness check command (polled after start succeeds)
+    /// Falls back to `systemctl is-active <name>` if not set.
+    readiness_check: Option<String>,
+    /// Max seconds to wait for readiness (default: 30)
+    readiness_timeout: u32,
     /// Description
     description: String,
 }
@@ -24,6 +29,8 @@ impl EnsureService {
             name,
             enabled: true,
             started: true,
+            readiness_check: None,
+            readiness_timeout: 30,
             description,
         }
     }
@@ -37,6 +44,20 @@ impl EnsureService {
     /// Set whether the service should be started
     pub fn started(mut self, started: bool) -> Self {
         self.started = started;
+        self
+    }
+
+    /// Set a custom readiness check command.
+    /// This command is polled after the service starts until it returns 0.
+    /// Example: `pg_isready` for PostgreSQL, `docker info` for Docker.
+    pub fn with_readiness_check(mut self, cmd: impl Into<String>) -> Self {
+        self.readiness_check = Some(cmd.into());
+        self
+    }
+
+    /// Set the maximum time in seconds to wait for readiness (default: 30)
+    pub fn with_readiness_timeout(mut self, seconds: u32) -> Self {
+        self.readiness_timeout = seconds;
         self
     }
 }
@@ -68,8 +89,34 @@ impl Step for EnsureService {
             cmds.push(format!(
                 "systemctl is-active {name} >/dev/null 2>&1 || \
                  systemctl start {name} || \
-                 {{ for i in 1 2 3 4 5; do sleep 3; systemctl start {name} && break; done; }}",
+                 {{ for i in 1 2 3 4 5; do \
+                     sleep 3; \
+                     systemctl start {name} && break; \
+                 done; \
+                 systemctl is-active {name} >/dev/null 2>&1 || \
+                     echo \"WARNING: {name} failed to start after 5 attempts — provisioning is idempotent, you can safely re-run tengu-init to retry\"; }}",
                 name = self.name
+            ));
+
+            // Poll readiness after start — wait until the service is truly ready
+            let check = self
+                .readiness_check
+                .clone()
+                .unwrap_or_else(|| format!("systemctl is-active --quiet {}", self.name));
+            let timeout = self.readiness_timeout;
+            cmds.push(format!(
+                "READY_ELAPSED=0; \
+                 while ! ({check}); do \
+                     sleep 2; \
+                     READY_ELAPSED=$((READY_ELAPSED + 2)); \
+                     if [ \"$READY_ELAPSED\" -ge {timeout} ]; then \
+                         echo \"WARNING: {name} not ready after {timeout}s — provisioning is idempotent, you can safely re-run tengu-init to retry\"; \
+                         break; \
+                     fi; \
+                 done",
+                check = check,
+                timeout = timeout,
+                name = self.name,
             ));
         }
 
