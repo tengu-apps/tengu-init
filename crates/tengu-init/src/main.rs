@@ -889,7 +889,10 @@ fn main() -> Result<()> {
             println!("  Point these A records to {}:", style(ip_hint).cyan());
             println!("    api.{}", resolved.domain_platform);
             println!("    docs.{}", resolved.domain_platform);
-            println!("    *.{}  (apps + git deploy via SSH)", resolved.domain_apps);
+            println!(
+                "    *.{}  (apps + git deploy via SSH)",
+                resolved.domain_apps
+            );
             println!(
                 "\n  Caddy will automatically obtain Let's Encrypt certificates once DNS resolves.\n"
             );
