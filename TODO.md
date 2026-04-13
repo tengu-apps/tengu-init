@@ -68,39 +68,39 @@
 **Agent**: code-rust | **Repo**: ~/Projects/tengu-init | **Depends on**: Phase 4
 
 ### 5.1 TlsMode enum + TenguConfig restructure
-- [ ] Add `TlsMode` enum to `config.rs` (Cloudflare + Direct variants)
-- [ ] Replace `cf_api_key` + `cf_email` fields with `tls_mode: TlsMode` on TenguConfig
-- [ ] Add `is_cloudflare()` and `acme_email()` helpers
-- [ ] Update builder: replace `.cf_api_key()` / `.cf_email()` with `.tls_mode()`
-- [ ] Re-export `TlsMode` from `lib.rs`
+- [x] Add `TlsMode` enum to `config.rs` (Cloudflare + Direct variants)
+- [x] Replace `cf_api_key` + `cf_email` fields with `tls_mode: TlsMode` on TenguConfig
+- [x] Add `is_cloudflare()` and `acme_email()` helpers
+- [x] Update builder: replace `.cf_api_key()` / `.cf_email()` with `.tls_mode()`
+- [x] Re-export `TlsMode` from `lib.rs`
 
 ### 5.2 Mode-aware templates
-- [ ] `caddyfile()`: direct mode — no cf_tls snippet, no disable_redirects, standard ACME
-- [ ] `tengu_config_toml()`: direct mode — no `[cloudflare]` section, add `[server] tunnel = false`
-- [ ] Add tests for both mode outputs
+- [x] `caddyfile()`: direct mode — no cf_tls snippet, no disable_redirects, standard ACME
+- [x] `tengu_config_toml()`: direct mode — no `[cloudflare]` section, add `[server] tunnel = false`
+- [x] Add tests for both mode outputs
 
 ### 5.3 Manifest conditionals
-- [ ] Phase 8: gate CF systemd drop-in behind `config.is_cloudflare()`
-- [ ] Phase 9: direct mode → always enable UFW; CF mode → respect flag
+- [x] Phase 8: gate CF systemd drop-in behind `config.is_cloudflare()`
+- [x] Phase 9: direct mode → always enable UFW; CF mode → respect flag
 
 ### 5.4 CLI + config file
-- [ ] Add `--direct` flag to Args struct
-- [ ] Add `ModeConfig` struct to config file schema
-- [ ] Update `ResolvedConfig`: `tls_mode: TlsMode` replaces `cf_api_key` + `cf_email`
+- [x] Add `--direct` flag to Args struct
+- [x] Add `ModeConfig` struct to config file schema
+- [x] Update `ResolvedConfig`: `tls_mode: TlsMode` replaces `cf_api_key` + `cf_email`
 
 ### 5.5 Resolve logic
-- [ ] `resolve_config()`: mode resolution (--direct > config > interactive prompt)
-- [ ] Direct mode: skip CF prompts, skip cert.pem check
-- [ ] Direct mode: prompt for `acme_email` (default: notify_email)
+- [x] `resolve_config()`: mode resolution (--direct > config > interactive prompt)
+- [x] Direct mode: skip CF prompts, skip cert.pem check
+- [x] Direct mode: prompt for `acme_email` (default: notify_email)
 
 ### 5.6 Post-provision branching
-- [ ] CF mode: existing tunnel + DNS flow
-- [ ] Direct mode: print DNS A record reminder (api/docs/git + wildcard)
+- [x] CF mode: existing tunnel + DNS flow
+- [x] Direct mode: print DNS A record reminder (api/docs/git + wildcard)
 
 ### 5.7 Display + tests
-- [ ] Config tables: show TLS mode row, conditional CF/ACME fields
-- [ ] `test_config_cloudflare()` + `test_config_direct()` test helpers
-- [ ] `cargo check` + `cargo test` pass
+- [x] Config tables: show TLS mode row, conditional CF/ACME fields
+- [x] `test_config_cloudflare()` + `test_config_direct()` test helpers
+- [x] `cargo check` + `cargo test` pass
 
 ### 5.8 End-to-end verification
 - [ ] `tengu-init show --direct` — no CF references in generated script
