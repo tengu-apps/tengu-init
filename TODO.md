@@ -63,3 +63,59 @@
 - [ ] Delete test apps: `tengu app delete test-ruby test-node test-static -y`
 - [ ] Update `DEFAULT_RELEASE` in `main.rs` to new tag
 - [ ] Tag releases if warranted (`v0.2.0` for both repos)
+
+## Phase 5 "Atlas": Dual TLS Mode — Cloudflare + Direct HTTPS
+**Agent**: code-rust | **Repo**: ~/Projects/tengu-init | **Depends on**: Phase 4
+
+### 5.1 TlsMode enum + TenguConfig restructure
+- [ ] Add `TlsMode` enum to `config.rs` (Cloudflare + Direct variants)
+- [ ] Replace `cf_api_key` + `cf_email` fields with `tls_mode: TlsMode` on TenguConfig
+- [ ] Add `is_cloudflare()` and `acme_email()` helpers
+- [ ] Update builder: replace `.cf_api_key()` / `.cf_email()` with `.tls_mode()`
+- [ ] Re-export `TlsMode` from `lib.rs`
+
+### 5.2 Mode-aware templates
+- [ ] `caddyfile()`: direct mode — no cf_tls snippet, no disable_redirects, standard ACME
+- [ ] `tengu_config_toml()`: direct mode — no `[cloudflare]` section, add `[server] tunnel = false`
+- [ ] Add tests for both mode outputs
+
+### 5.3 Manifest conditionals
+- [ ] Phase 8: gate CF systemd drop-in behind `config.is_cloudflare()`
+- [ ] Phase 9: direct mode → always enable UFW; CF mode → respect flag
+
+### 5.4 CLI + config file
+- [ ] Add `--direct` flag to Args struct
+- [ ] Add `ModeConfig` struct to config file schema
+- [ ] Update `ResolvedConfig`: `tls_mode: TlsMode` replaces `cf_api_key` + `cf_email`
+
+### 5.5 Resolve logic
+- [ ] `resolve_config()`: mode resolution (--direct > config > interactive prompt)
+- [ ] Direct mode: skip CF prompts, skip cert.pem check
+- [ ] Direct mode: prompt for `acme_email` (default: notify_email)
+
+### 5.6 Post-provision branching
+- [ ] CF mode: existing tunnel + DNS flow
+- [ ] Direct mode: print DNS A record reminder (api/docs/git + wildcard)
+
+### 5.7 Display + tests
+- [ ] Config tables: show TLS mode row, conditional CF/ACME fields
+- [ ] `test_config_cloudflare()` + `test_config_direct()` test helpers
+- [ ] `cargo check` + `cargo test` pass
+
+### 5.8 End-to-end verification
+- [ ] `tengu-init show --direct` — no CF references in generated script
+- [ ] `tengu-init --direct --hetzner -y` — full provision on fresh VM
+- [ ] Caddy obtains Let's Encrypt cert via HTTP-01
+- [ ] git push deploy works over SSH on port 22
+- [ ] Existing CF flow unchanged (backward compatible)
+
+### ETA
+
+| Phase | Naive | Coop | Sessions | Notes |
+|-------|-------|------|----------|-------|
+| 5.1-5.2 Config + templates | 3h | ~1h | 1 | Mechanical refactor, compile-driven |
+| 5.3 Manifest conditionals | 1h | ~20m | 1 | Small conditional gates |
+| 5.4-5.5 CLI + resolve | 3h | ~1.5h | 1 | Biggest change, many codepaths |
+| 5.6-5.7 Post-provision + display | 2h | ~45m | 1 | Print statements + table formatting |
+| 5.8 E2E test | 1h | ~30m | 1 | Needs live Hetzner VM + DNS setup |
+| **Total** | **10h** | **~4h** | **2** | One coding session, one test session |

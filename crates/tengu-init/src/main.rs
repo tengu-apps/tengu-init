@@ -16,7 +16,7 @@ use comfy_table::{Cell, Color, Table, presets::UTF8_FULL_CONDENSED};
 use console::{Emoji, style};
 use dialoguer::{Input, Password};
 use serde::{Deserialize, Serialize};
-use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig};
+use tengu_provision::{BashRenderer, Manifest, Renderer, TenguConfig, TlsMode};
 
 use providers::{Hetzner, SshProvider, TunnelConfig, hetzner::ServerParams};
 
@@ -35,6 +35,8 @@ struct Config {
     #[serde(default)]
     server: ServerConfig,
     #[serde(default)]
+    mode: ModeConfig,
+    #[serde(default)]
     domains: DomainsConfig,
     #[serde(default)]
     cloudflare: CloudflareConfig,
@@ -44,6 +46,14 @@ struct Config {
     ssh: SshConfig,
     #[serde(default)]
     notifications: NotificationsConfig,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ModeConfig {
+    /// TLS mode: "direct" or "cloudflare" (default: cloudflare)
+    tls: Option<String>,
+    /// ACME email for direct mode (defaults to notification email)
+    acme_email: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -159,6 +169,14 @@ struct Args {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
+    /// Use direct HTTPS (Let's Encrypt HTTP-01) instead of Cloudflare
+    #[arg(long)]
+    direct: bool,
+
+    /// ACME email for direct mode (defaults to notification email)
+    #[arg(long)]
+    acme_email: Option<String>,
+
     /// Enable UFW firewall configuration
     #[arg(long)]
     ufw: bool,
@@ -208,8 +226,7 @@ struct ResolvedConfig {
     admin_user: String,
     domain_platform: String,
     domain_apps: String,
-    cf_api_key: String,
-    cf_email: String,
+    tls_mode: TlsMode,
     resend_api_key: String,
     notify_email: String,
     ssh_key: String,
@@ -301,8 +318,40 @@ fn run_cloudflared_login() -> Result<()> {
 /// Priority: CLI args > env vars > config file > interactive prompt > defaults
 #[allow(clippy::too_many_lines)]
 fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
-    // Print header for interactive section
-    let needs_interactive = args.cf_email.is_none()
+    // Determine TLS mode: --direct flag > config file > interactive
+    let is_direct = if args.direct {
+        true
+    } else if let Some(ref mode) = config.mode.tls {
+        mode == "direct"
+    } else {
+        // Check if CF credentials are available anywhere — if not, default to prompting
+        let has_cf = args.cf_email.is_some()
+            || env::var("CF_EMAIL").is_ok()
+            || config.cloudflare.email.is_some();
+        if !has_cf && !args.yes {
+            println!(
+                "\n{}",
+                style("--- Tengu Init \u{2014} TLS Mode ---")
+                    .cyan()
+                    .bold()
+            );
+            let selection = dialoguer::Select::new()
+                .with_prompt("TLS mode")
+                .items(&[
+                    "Cloudflare (DNS-01 challenge + tunnel)",
+                    "Direct HTTPS (Let's Encrypt HTTP-01, no Cloudflare)",
+                ])
+                .default(0)
+                .interact()
+                .context("Failed to read TLS mode")?;
+            selection == 1
+        } else {
+            false
+        }
+    };
+
+    let needs_interactive = !is_direct
+        && args.cf_email.is_none()
         && env::var("CF_EMAIL").is_err()
         && config.cloudflare.email.is_none();
 
@@ -316,51 +365,71 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
         println!();
     }
 
-    // 1. Cloudflare email
-    let cf_email = args
-        .cf_email
-        .clone()
-        .or_else(|| env::var("CF_EMAIL").ok())
-        .or_else(|| config.cloudflare.email.clone())
-        .map_or_else(
-            || {
-                Input::<String>::new()
-                    .with_prompt("Cloudflare email")
-                    .validate_with(|input: &String| {
-                        if input.contains('@') && input.contains('.') {
-                            Ok(())
-                        } else {
-                            Err("Please enter a valid email address")
-                        }
-                    })
-                    .interact_text()
-                    .context("Failed to read Cloudflare email")
-            },
-            Ok,
-        )?;
+    // TLS mode — resolve credentials based on mode
+    let tls_mode = if is_direct {
+        // Direct mode: just need an ACME email
+        let acme_email = args
+            .acme_email
+            .clone()
+            .or_else(|| config.mode.acme_email.clone())
+            .or_else(|| args.notify_email.clone())
+            .or_else(|| config.notifications.email.clone());
 
-    // 2. Cloudflare API key
-    let cf_api_key = args
-        .cf_api_key
-        .clone()
-        .or_else(|| env::var("CF_API_KEY").ok())
-        .or_else(|| config.cloudflare.api_key.clone())
-        .map_or_else(
-            || {
-                Password::new()
-                    .with_prompt("Cloudflare API key")
-                    .interact()
-                    .context("Failed to read Cloudflare API key")
-            },
-            Ok,
-        )?;
+        // Will be resolved below after notify_email if still None
+        TlsMode::Direct {
+            acme_email: acme_email.unwrap_or_default(),
+        }
+    } else {
+        // Cloudflare mode: need CF credentials
+        let cf_email = args
+            .cf_email
+            .clone()
+            .or_else(|| env::var("CF_EMAIL").ok())
+            .or_else(|| config.cloudflare.email.clone())
+            .map_or_else(
+                || {
+                    Input::<String>::new()
+                        .with_prompt("Cloudflare email")
+                        .validate_with(|input: &String| {
+                            if input.contains('@') && input.contains('.') {
+                                Ok(())
+                            } else {
+                                Err("Please enter a valid email address")
+                            }
+                        })
+                        .interact_text()
+                        .context("Failed to read Cloudflare email")
+                },
+                Ok,
+            )?;
 
-    // 3. Cloudflare Tunnel auth - check for cert.pem
-    if !cloudflared_cert_exists() {
-        run_cloudflared_login()?;
-    }
+        let cf_api_key = args
+            .cf_api_key
+            .clone()
+            .or_else(|| env::var("CF_API_KEY").ok())
+            .or_else(|| config.cloudflare.api_key.clone())
+            .map_or_else(
+                || {
+                    Password::new()
+                        .with_prompt("Cloudflare API key")
+                        .interact()
+                        .context("Failed to read Cloudflare API key")
+                },
+                Ok,
+            )?;
 
-    // 4. Resend API key
+        // Cloudflare Tunnel auth - check for cert.pem
+        if !cloudflared_cert_exists() {
+            run_cloudflared_login()?;
+        }
+
+        TlsMode::Cloudflare {
+            api_key: cf_api_key,
+            email: cf_email,
+        }
+    };
+
+    // Resend API key
     let resend_api_key = args
         .resend_api_key
         .clone()
@@ -376,7 +445,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
-    // 5. Platform domain
+    // Platform domain
     let domain_platform = args
         .domain_platform
         .clone()
@@ -392,7 +461,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
-    // 6. Apps domain
+    // Apps domain
     let domain_apps = args
         .domain_apps
         .clone()
@@ -408,7 +477,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
-    // 7. SSH public key
+    // SSH public key
     let detected_key = detect_ssh_key();
     let ssh_key = args
         .ssh_key
@@ -430,23 +499,40 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
-    // 8. Notification email (default: CF email)
+    // Notification email (default: CF email in CF mode, or prompt in direct)
+    let default_email = match &tls_mode {
+        TlsMode::Cloudflare { email, .. } => email.clone(),
+        TlsMode::Direct { acme_email } if !acme_email.is_empty() => acme_email.clone(),
+        TlsMode::Direct { .. } => String::new(),
+    };
     let notify_email = args
         .notify_email
         .clone()
         .or_else(|| config.notifications.email.clone())
         .map_or_else(
             || {
-                Input::<String>::new()
-                    .with_prompt("Notification email")
-                    .default(cf_email.clone())
+                let prompt = Input::<String>::new().with_prompt("Notification email");
+                let prompt = if default_email.is_empty() {
+                    prompt
+                } else {
+                    prompt.default(default_email.clone())
+                };
+                prompt
                     .interact_text()
                     .context("Failed to read notification email")
             },
             Ok,
         )?;
 
-    // 9. Tengu release
+    // If direct mode and acme_email was empty, fill it from notify_email
+    let tls_mode = match tls_mode {
+        TlsMode::Direct { acme_email } if acme_email.is_empty() => TlsMode::Direct {
+            acme_email: notify_email.clone(),
+        },
+        other => other,
+    };
+
+    // Tengu release
     let release = args
         .release
         .clone()
@@ -462,7 +548,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
             Ok,
         )?;
 
-    // 10. Admin username
+    // Admin username
     let admin_user = args
         .user
         .clone()
@@ -482,8 +568,7 @@ fn resolve_config(args: &Args, config: &Config) -> Result<ResolvedConfig> {
         admin_user,
         domain_platform,
         domain_apps,
-        cf_api_key,
-        cf_email,
+        tls_mode,
         resend_api_key,
         notify_email,
         ssh_key,
@@ -616,8 +701,7 @@ fn main() -> Result<()> {
         .user(&resolved.admin_user)
         .domain_platform(&resolved.domain_platform)
         .domain_apps(&resolved.domain_apps)
-        .cf_api_key(&resolved.cf_api_key)
-        .cf_email(&resolved.cf_email)
+        .tls_mode(resolved.tls_mode.clone())
         .resend_api_key(&resolved.resend_api_key)
         .notify_email(&resolved.notify_email)
         .ssh_keys(if resolved.ssh_key.is_empty() {
@@ -770,31 +854,52 @@ fn main() -> Result<()> {
     let provider = SshProvider::new(&host, args.port);
     provider.provision(&tengu_config)?;
 
-    // Set up Cloudflare Tunnel
-    let tunnel_config = TunnelConfig {
-        domain_platform: resolved.domain_platform.clone(),
-        domain_apps: resolved.domain_apps.clone(),
-        tunnel_name: "tengu".to_string(),
-    };
-    provider.setup_tunnel(&tunnel_config)?;
+    // Post-provision: mode-dependent setup
+    match &resolved.tls_mode {
+        TlsMode::Cloudflare { api_key, email } => {
+            // Set up Cloudflare Tunnel
+            let tunnel_config = TunnelConfig {
+                domain_platform: resolved.domain_platform.clone(),
+                domain_apps: resolved.domain_apps.clone(),
+                tunnel_name: "tengu".to_string(),
+            };
+            provider.setup_tunnel(&tunnel_config)?;
 
-    // Update wildcard DNS for apps domain
-    if let Some(ref ip) = server_ip {
-        // Hetzner mode: point *.apps-domain to VM IP (A record, not proxied)
-        update_wildcard_dns(
-            &resolved.cf_email,
-            &resolved.cf_api_key,
-            &resolved.domain_apps,
-            ip,
-        )?;
-    } else {
-        // Local/SSH mode: point *.apps-domain to tunnel (CNAME, proxied)
-        update_wildcard_dns_tunnel(
-            &resolved.cf_email,
-            &resolved.cf_api_key,
-            &resolved.domain_apps,
-            &tunnel_config.tunnel_name,
-        )?;
+            // Update wildcard DNS for apps domain
+            if let Some(ref ip) = server_ip {
+                // Hetzner mode: point *.apps-domain to VM IP (A record, not proxied)
+                update_wildcard_dns(email, api_key, &resolved.domain_apps, ip)?;
+            } else {
+                // Local/SSH mode: point *.apps-domain to tunnel (CNAME, proxied)
+                update_wildcard_dns_tunnel(
+                    email,
+                    api_key,
+                    &resolved.domain_apps,
+                    &tunnel_config.tunnel_name,
+                )?;
+            }
+        }
+        TlsMode::Direct { .. } => {
+            // No tunnel setup needed in direct mode.
+            // Print DNS reminder — user must configure A records manually.
+            let ip_hint = server_ip.as_deref().unwrap_or("<your-server-ip>");
+            println!(
+                "\n{} {}",
+                style("!").yellow().bold(),
+                style("DNS Configuration Required").yellow().bold()
+            );
+            println!(
+                "  Point these A records to {}:",
+                style(ip_hint).cyan()
+            );
+            println!("    api.{}", resolved.domain_platform);
+            println!("    docs.{}", resolved.domain_platform);
+            println!("    git.{}", resolved.domain_platform);
+            println!("    *.{}", resolved.domain_apps);
+            println!(
+                "\n  Caddy will automatically obtain Let's Encrypt certificates once DNS resolves.\n"
+            );
+        }
     }
 
     // Print success
@@ -1113,19 +1218,30 @@ fn run_show(config: &Config) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "tengu.host".to_string()),
         )
-        .cf_api_key(
-            config
-                .cloudflare
-                .api_key
-                .clone()
-                .unwrap_or_else(|| "<CF_API_KEY>".to_string()),
-        )
-        .cf_email(
-            config
-                .cloudflare
-                .email
-                .clone()
-                .unwrap_or_else(|| "<CF_EMAIL>".to_string()),
+        .tls_mode(
+            if config.mode.tls.as_deref() == Some("direct") {
+                TlsMode::Direct {
+                    acme_email: config
+                        .mode
+                        .acme_email
+                        .clone()
+                        .or_else(|| config.notifications.email.clone())
+                        .unwrap_or_else(|| "admin@example.com".to_string()),
+                }
+            } else {
+                TlsMode::Cloudflare {
+                    api_key: config
+                        .cloudflare
+                        .api_key
+                        .clone()
+                        .unwrap_or_else(|| "<CF_API_KEY>".to_string()),
+                    email: config
+                        .cloudflare
+                        .email
+                        .clone()
+                        .unwrap_or_else(|| "<CF_EMAIL>".to_string()),
+                }
+            },
         )
         .resend_api_key(
             config
@@ -1236,6 +1352,20 @@ fn print_banner() {
     );
 }
 
+/// Add TLS mode rows to a config display table
+fn add_tls_mode_rows(table: &mut Table, tls_mode: &TlsMode) {
+    match tls_mode {
+        TlsMode::Cloudflare { email, .. } => {
+            table.add_row(vec!["TLS Mode", "Cloudflare (DNS-01)"]);
+            table.add_row(vec!["CF Email", email]);
+        }
+        TlsMode::Direct { acme_email } => {
+            table.add_row(vec!["TLS Mode", "Direct HTTPS (HTTP-01)"]);
+            table.add_row(vec!["ACME Email", acme_email]);
+        }
+    }
+}
+
 /// Print config table for Hetzner flow (includes server type info)
 fn print_hetzner_config_table(cfg: &ResolvedConfig, hetzner: &HetznerParams) -> Result<()> {
     let type_info = Hetzner::server_type_info(&hetzner.server_type)?;
@@ -1257,7 +1387,7 @@ fn print_hetzner_config_table(cfg: &ResolvedConfig, hetzner: &HetznerParams) -> 
     table.add_row(vec!["Location", &hetzner.location]);
     table.add_row(vec!["Image", &hetzner.image]);
     table.add_row(vec!["Admin User", &cfg.admin_user]);
-    table.add_row(vec!["Cloudflare", &cfg.cf_email]);
+    add_tls_mode_rows(&mut table, &cfg.tls_mode);
     table.add_row(vec![
         "Resend",
         &format!(
@@ -1287,7 +1417,7 @@ fn print_provision_config_table(cfg: &ResolvedConfig) {
     ]);
 
     table.add_row(vec!["Admin User", &cfg.admin_user]);
-    table.add_row(vec!["Cloudflare", &cfg.cf_email]);
+    add_tls_mode_rows(&mut table, &cfg.tls_mode);
     table.add_row(vec![
         "Resend",
         &format!(

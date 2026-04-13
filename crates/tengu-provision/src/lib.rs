@@ -31,7 +31,7 @@ pub mod manifest;
 pub mod render;
 pub mod steps;
 
-pub use config::TenguConfig;
+pub use config::{TenguConfig, TlsMode};
 pub use manifest::Manifest;
 pub use render::{BashRenderer, Renderer};
 pub use steps::Step;

@@ -69,9 +69,9 @@ impl Manifest {
     /// - Docker from Ubuntu repositories (docker.io)
     /// - `PostgreSQL` 16 with pgvector extension
     /// - Ollama for AI/ML
-    /// - tengu-caddy (custom Caddy build with Cloudflare DNS)
-    /// - Tengu configuration files
-    /// - Firewall rules
+    /// - tengu-caddy (custom Caddy build, works with or without Cloudflare)
+    /// - Tengu configuration files (mode-aware: CF DNS-01 or direct HTTP-01)
+    /// - Firewall rules (always enabled in direct mode)
     /// - Tengu .deb package installation
     /// - OpenSSH configuration for git operations
     #[allow(clippy::too_many_lines)]
@@ -194,26 +194,28 @@ impl Manifest {
                 .with_owner("root:root"),
         );
 
-        // Caddy systemd drop-in for Cloudflare API token
-        manifest.add_step(
-            EnsureDirectory::new("/etc/systemd/system/caddy.service.d")
-                .with_permissions("0755")
+        // Caddy systemd drop-in for Cloudflare API token (CF mode only)
+        if config.is_cloudflare() {
+            manifest.add_step(
+                EnsureDirectory::new("/etc/systemd/system/caddy.service.d")
+                    .with_permissions("0755")
+                    .with_owner("root:root"),
+            );
+            manifest.add_step(
+                WriteFile::new(
+                    "/etc/systemd/system/caddy.service.d/cloudflare.conf",
+                    config.caddy_cloudflare_env(),
+                )
+                .with_permissions("0644")
                 .with_owner("root:root"),
-        );
-        manifest.add_step(
-            WriteFile::new(
-                "/etc/systemd/system/caddy.service.d/cloudflare.conf",
-                config.caddy_cloudflare_env(),
-            )
-            .with_permissions("0644")
-            .with_owner("root:root"),
-        );
+            );
 
-        // Reload systemd after drop-in
-        manifest.add_step(RunCommand::new(
-            "Reload systemd daemon",
-            "systemctl daemon-reload",
-        ));
+            // Reload systemd after drop-in
+            manifest.add_step(RunCommand::new(
+                "Reload systemd daemon",
+                "systemctl daemon-reload",
+            ));
+        }
 
         // fail2ban configuration
         manifest.add_step(
@@ -223,9 +225,17 @@ impl Manifest {
         );
 
         // =========================================================
-        // Phase 9: Firewall Rules (optional)
+        // Phase 9: Firewall Rules
+        // Direct mode: always enabled (server directly exposed)
+        // Cloudflare mode: optional (traffic may go through tunnel)
         // =========================================================
-        if config.enable_ufw {
+        let enable_firewall = if config.is_cloudflare() {
+            config.enable_ufw
+        } else {
+            true // Direct mode always needs UFW
+        };
+
+        if enable_firewall {
             manifest.add_step(
                 EnsureFirewall::new()
                     .allow("22/tcp") // SSH

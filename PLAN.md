@@ -580,3 +580,210 @@ Test app source is ephemeral (created in /tmp, pushed, then deleted).
 | VM boot takes > 120s | Extremely unlikely for cax41. Fallback: re-run (SSH wait is the first step). |
 | Caddy can't get TLS cert | CF DNS challenge needs working API key. Phase 2.3 fixes the env var mismatch. |
 | Test app push fails | Indicates tengu service issue. Check `journalctl -u tengu` on VM. |
+
+---
+
+## Phase 5 "Atlas": Dual TLS Mode — Cloudflare + Direct HTTPS
+
+**Agent**: code-rust
+**Repo**: ~/Projects/tengu-init (Rust, Cargo workspace)
+**Depends on**: Phase 4 (stable baseline before architectural change)
+
+### Context
+
+tengu-init currently requires Cloudflare credentials and installs a custom Caddy build with the CF DNS plugin. This blocks deploying Tengu on a simple Hetzner VM with just SSH + HTTPS exposed, no CF dependency.
+
+**Goal:** Support two provisioning modes side-by-side:
+- **Cloudflare** (existing) — CF DNS-01 challenge, optional tunnel, CF manages DNS
+- **Direct** (new) — Standard Let's Encrypt HTTP-01 via Caddy's default ACME, no CF at all
+
+### Architecture: `TlsMode` Enum
+
+```rust
+// crates/tengu-provision/src/config.rs
+pub enum TlsMode {
+    Cloudflare { api_key: String, email: String },
+    Direct { acme_email: String },
+}
+```
+
+Replaces `cf_api_key` and `cf_email` as required top-level fields on `TenguConfig`. Compile-time exhaustiveness on all mode-dependent codepaths.
+
+### 5.1 `tengu-provision` — Config Restructure
+
+**File**: `crates/tengu-provision/src/config.rs`
+
+- Add `TlsMode` enum
+- Replace `cf_api_key: String` + `cf_email: String` → `tls_mode: TlsMode`
+- Add helpers: `is_cloudflare()`, `acme_email()`
+- `caddyfile()` → match on mode:
+  - **CF:** current template (cf_tls snippet, disable_redirects)
+  - **Direct:** clean ACME template (no tls directive, Caddy auto-HTTPS)
+- `tengu_config_toml()` → match on mode:
+  - **CF:** current output with `[cloudflare]` section
+  - **Direct:** no `[cloudflare]`, add `[server] tunnel = false`
+- `caddy_cloudflare_env()` → unchanged, only called in CF mode
+- Builder: replace `.cf_api_key()` / `.cf_email()` with `.tls_mode()`
+- Test helpers: `test_config_cloudflare()` + `test_config_direct()`
+
+**Direct-mode Caddyfile:**
+```caddy
+{
+    email <acme_email>
+}
+
+import sites/*.caddy
+
+api.<domain_platform> {
+    reverse_proxy localhost:8080
+}
+
+docs.<domain_platform> {
+    reverse_proxy localhost:8080
+}
+
+git.<domain_platform> {
+    reverse_proxy localhost:8080
+}
+```
+
+Key differences from CF mode: no `auto_https disable_redirects`, no `(cf_tls)` snippet, no `import cf_tls`. Caddy does HTTP-01 and auto-redirect by default.
+
+**Direct-mode config.toml:**
+```toml
+domain = "<domain_apps>"
+
+[database]
+url = "postgres://tengu:tengu@localhost:5432/tengu"
+
+[server]
+tunnel = false
+```
+
+No `[cloudflare]` section.
+
+### 5.2 `tengu-provision` — Manifest Conditionals
+
+**File**: `crates/tengu-provision/src/manifest.rs`
+
+- **Phase 6 (Caddy):** No change — always install tengu-caddy (works without CF plugin, avoids dual install path)
+- **Phase 8 (Config):** Gate CF systemd drop-in behind `config.is_cloudflare()` — skip the `/etc/systemd/system/caddy.service.d/cloudflare.conf` write and the systemd daemon-reload in direct mode
+- **Phase 9 (Firewall):** Direct mode → always enable UFW; CF mode → respect `enable_ufw` flag
+
+```rust
+let enable_firewall = match config.tls_mode {
+    TlsMode::Direct { .. } => true,
+    TlsMode::Cloudflare { .. } => config.enable_ufw,
+};
+```
+
+### 5.3 `tengu-provision` — Re-export
+
+**File**: `crates/tengu-provision/src/lib.rs`
+- Add `pub use config::TlsMode;`
+
+### 5.4 `tengu-init` — CLI + Config
+
+**File**: `crates/tengu-init/src/main.rs`
+
+**New CLI flag:**
+```rust
+/// Use direct HTTPS (Let's Encrypt HTTP-01) instead of Cloudflare
+#[arg(long)]
+direct: bool,
+```
+
+**Config file addition** (`~/.config/tengu/init.toml`):
+```toml
+[mode]
+tls = "direct"  # or "cloudflare"
+acme_email = "admin@example.com"  # only for direct mode
+```
+
+New config structs:
+```rust
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ModeConfig {
+    tls: Option<String>,
+    acme_email: Option<String>,
+}
+```
+
+**`ResolvedConfig`:** Replace `cf_api_key` + `cf_email` with `tls_mode: TlsMode`.
+
+### 5.5 `tengu-init` — Resolve Logic
+
+**File**: `crates/tengu-init/src/main.rs` — `resolve_config()`
+
+Mode resolution order: `--direct` flag > config `mode.tls` > interactive `dialoguer::Select` prompt.
+
+- **Direct mode:** prompt for `acme_email` (default: `notify_email`). Skip CF credential prompts, skip `cloudflared_cert_exists()` check.
+- **CF mode:** existing flow unchanged.
+
+### 5.6 `tengu-init` — Post-Provision Branching
+
+**File**: `crates/tengu-init/src/main.rs` — after `provider.provision()`
+
+```rust
+match &resolved.tls_mode {
+    TlsMode::Cloudflare { .. } => {
+        // existing: setup_tunnel() + update_wildcard_dns()
+    }
+    TlsMode::Direct { .. } => {
+        // No tunnel. Print DNS reminder:
+        println!("Point these A records to {}:", server_ip);
+        println!("  api.{}", resolved.domain_platform);
+        println!("  docs.{}", resolved.domain_platform);
+        println!("  git.{}", resolved.domain_platform);
+        println!("  *.{}", resolved.domain_apps);
+    }
+}
+```
+
+### 5.7 Display Table Updates
+
+Show "TLS Mode" row. Conditionally show CF fields or ACME email.
+
+### Files Modified
+
+| File | Scope |
+|------|-------|
+| `crates/tengu-provision/src/config.rs` | TlsMode enum, TenguConfig restructure, mode-aware templates |
+| `crates/tengu-provision/src/manifest.rs` | Conditional Phase 8 + Phase 9 |
+| `crates/tengu-provision/src/lib.rs` | Re-export TlsMode |
+| `crates/tengu-init/src/main.rs` | --direct flag, config structs, resolve logic, post-provision gating, display |
+
+### Files Unchanged
+
+- `steps/*` — generic step types, no mode awareness needed
+- `render/*` — renders whatever manifest contains
+- `providers/hetzner.rs` — VM creation is mode-independent
+- `providers/ssh.rs` — tunnel setup already a separate method called from main
+
+### Risks
+
+| Risk | Mitigation |
+|------|------------|
+| DNS not pointed before provision → Caddy ACME fails | Print pre-flight warning; consider DNS resolution check |
+| tengu-caddy conflicts with stock caddy from apt | Always use tengu-caddy — it works without CF plugin |
+| resend_api_key still prompted in direct mode | Acceptable — tengu-server may use it independently |
+
+### Verification
+
+1. `cargo check` — workspace compiles
+2. `cargo test` — all existing + new tests pass
+3. `tengu-init show --direct` — verify generated script has no CF references
+4. `tengu-init --direct root@<hetzner-ip>` — end-to-end provision with direct HTTPS
+5. Existing CF flow unchanged: `tengu-init root@host` still prompts for CF creds
+
+### Success Criteria
+
+- [ ] `TlsMode` enum with Cloudflare + Direct variants
+- [ ] `--direct` CLI flag works
+- [ ] Direct-mode Caddyfile has no CF references
+- [ ] Direct-mode config.toml has no `[cloudflare]` section
+- [ ] CF systemd drop-in skipped in direct mode
+- [ ] UFW always enabled in direct mode
+- [ ] Post-provision prints DNS reminder in direct mode
+- [ ] `cargo test` passes with both mode test configs
+- [ ] Full provision with `--direct` on a Hetzner VM
