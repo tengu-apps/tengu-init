@@ -155,8 +155,8 @@ jobs:
   build-macos-arm:
     name: build-macos-arm
     needs: [lint, types, test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, fuji]
+    if: false # disabled — macOS builds temporarily paused
+    runs-on: macos-latest
     env:
       RUSTUP_HOME: /Users/chi/.rustup-arm
       CARGO_HOME: /Users/chi/.cargo-arm
@@ -215,8 +215,8 @@ jobs:
   build-macos-intel:
     name: build-macos-intel
     needs: [lint, types, test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, fuji]
+    if: false # disabled — macOS builds temporarily paused
+    runs-on: macos-latest
     env:
       RUSTUP_HOME: /Users/chi/.rustup-intel
       CARGO_HOME: /Users/chi/.cargo-intel
@@ -276,7 +276,7 @@ jobs:
 
   release:
     name: release
-    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm, build-macos-arm, build-macos-intel]
+    needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, Linux, X64]
     steps:
