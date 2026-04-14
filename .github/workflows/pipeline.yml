@@ -18,7 +18,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -52,7 +52,7 @@ jobs:
 
   types:
     name: types
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -61,7 +61,7 @@ jobs:
 
   test:
     name: test
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
     name: build-amd-linux
     needs: [lint, types, test]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -92,27 +92,23 @@ jobs:
     name: build-arm-linux
     needs: [lint, types, test]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
       - name: Build
-        run: cross build --release --target aarch64-unknown-linux-gnu
+        run: cargo build --release
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: tengu-init-linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/tengu-init
+          path: target/release/tengu-init
 
   build-deb-amd:
     name: build-deb-amd
     needs: [build-amd-linux]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -137,21 +133,19 @@ jobs:
     name: build-deb-arm
     needs: [build-arm-linux]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
       - name: Download binary artifact
         uses: actions/download-artifact@v8
         with:
           name: tengu-init-linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/
+          path: target/release/
       - name: Install cargo-deb
         run: cargo install cargo-deb
       - name: Build deb
-        run: cargo deb -p tengu-init --no-build --no-strip --target aarch64-unknown-linux-gnu --output tengu-init_arm64.deb
+        run: cargo deb -p tengu-init --no-build --no-strip --output tengu-init_arm64.deb
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -284,7 +278,7 @@ jobs:
     name: release
     needs: [build-amd-linux, build-arm-linux, build-deb-amd, build-deb-arm, build-macos-arm, build-macos-intel]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -313,7 +307,7 @@ jobs:
     name: update-homebrew
     needs: release
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: [self-hosted, junkpile]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Get version
         id: version
