@@ -160,7 +160,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build for macOS ARM64
-        run: cargo zigbuild --release --target aarch64-apple-darwin
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo zigbuild --release --target aarch64-apple-darwin
       - name: Sign binary
         env:
           APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
@@ -185,7 +187,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build for macOS x86_64
-        run: cargo zigbuild --release --target x86_64-apple-darwin
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo zigbuild --release --target x86_64-apple-darwin
       - name: Sign binary
         env:
           APPLE_SIGNING_KEY: ${{ secrets.APPLE_SIGNING_KEY }}
