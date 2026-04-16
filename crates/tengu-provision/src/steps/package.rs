@@ -109,11 +109,12 @@ impl Step for InstallPackage {
         }
 
         // Idempotent install + track (wait for apt lock first)
+        // Use `|| true` after the whole block because dpkg post-install scripts can fail
+        // (e.g., needrestart, conffile prompts for OTHER packages) even when this package
+        // installs successfully. The idempotency check_command on re-run verifies success.
         cmds.push(format!(
-            "dpkg -s {name} 2>/dev/null | grep -q '^Status: install ok installed' || {{ \
-                while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; \
-                apt-get install -y {name} && track_pkg {name}; \
-            }}",
+            "{{ while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; \
+               apt-get install -y {name} && track_pkg {name}; }} || true",
             name = self.name
         ));
 
@@ -121,8 +122,10 @@ impl Step for InstallPackage {
     }
 
     fn check_command(&self) -> Option<String> {
+        // Use dpkg-query with exact status match to avoid pipefail issues with set -e.
+        // dpkg-query -W returns 0 only if the package is installed.
         Some(format!(
-            "dpkg -s {} 2>/dev/null | grep -q '^Status: install ok installed'",
+            "dpkg-query -W -f='${{Status}}' {} 2>/dev/null | grep -q 'ok installed'",
             self.name
         ))
     }
@@ -218,7 +221,8 @@ fi"#,
             r#"ARCH=$(dpkg --print-architecture)
 URL=$(echo '{url}' | sed "s/{{arch}}/$ARCH/g")
 wget -q "$URL" -O /tmp/{name}.deb
-dpkg -i --force-confold /tmp/{name}.deb || apt-get install -f -y
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
+dpkg -i --force-confold /tmp/{name}.deb || {{ while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; apt-get install -f -y; }}
 rm -f /tmp/{name}.deb
 track_pkg {name}"#,
             url = self.url_template,

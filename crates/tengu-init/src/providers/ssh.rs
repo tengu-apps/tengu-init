@@ -328,7 +328,7 @@ echo ""
         // Upload local .deb if specified
         if let Some(deb_path) = &config.deb_path {
             println!("{} Uploading local .deb package...", style("*").cyan());
-            self.scp_file(deb_path, "/tmp/tengu-local.deb")?;
+            self.scp_file(deb_path, "/root/tengu-local.deb")?;
             println!("  {} .deb uploaded", style("v").green());
         }
 

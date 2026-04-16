@@ -1,121 +1,34 @@
-# TODO.md -- Zero-Touch Tengu PaaS Deployment
+# TODO: E2E Release Test — XFS + Direct TLS
 
-## Phase 1 "GM": Tengu Core -- Commit, Build, Ship
-**Agent**: code-rust | **Repo**: ~/Projects/tengu
+## Pre-Flight
 
-- [ ] Verify Ruby CMD fix in `src/app/manifest.rs:48` (`puma -p 5000`)
-- [ ] Verify Node lockfile fallback in `src/app/manifest.rs:62`
-- [ ] Verify pg_isready fix in `src/server/mod.rs:71-87`
-- [ ] Run `cargo test` -- all 368 tests pass
-- [ ] `git add -A && git commit -m 'fix: Ruby puma port, Node lockfile fallback, PostgreSQL pg_isready'`
-- [ ] `git push`
-- [ ] `cargo zigbuild --release --target aarch64-unknown-linux-gnu`
-- [ ] `cargo deb --no-build --no-strip --target aarch64-unknown-linux-gnu`
-- [ ] Confirm .deb exists: `target/aarch64-unknown-linux-gnu/debian/tengu_0.2.0-1_arm64.deb`
+- [x] Build latest tengu .deb (ARM64) — built on runner-arm64
+- [x] Build latest tengu .deb (AMD64) — built on runner-amd64
+- [x] Build tengu-init binary — v0.5.5
+- [x] Verify DNS availability for test subdomains
 
-## Phase 2 "Ball": tengu-init Bug Fixes
-**Agent**: code-rust | **Repo**: ~/Projects/tengu-init
+## Phase 1: ARM64 (cax41)
 
-### 2.1 SSH timing
-- [ ] `ssh.rs`: Change `max_attempts` from 30 to 24
-- [ ] `ssh.rs`: Change `ConnectTimeout` from 5 to 10
-- [ ] `ssh.rs`: Change sleep from 2s to 5s
+- [x] Create Hetzner VM (cax41, fsn1, IP 178.105.1.209)
+- [x] Run `tengu-init --direct` — XFS steps 30-36 all green
+- [x] Verify: `docker info` shows `overlay2` + `xfs`
+- [x] Verify: `/var/lib/docker` mounted as XFS with `prjquota`
+- [x] Verify: fstab entry for `docker.img`
+- [x] Verify: `--storage-opt size=50M` enforced (container sees 50M)
+- [x] Verify: `/etc/docker/daemon.json` has `overlay2`
+- [x] Verify: all services running (tengu, caddy, docker, postgresql)
+- [x] Reboot VM, confirm XFS mount + services survive
+- [x] Destroy VM
 
-### 2.2 Provision script reliability
-- [ ] `bash.rs`: Add apt lock wait preamble (`fuser /var/lib/dpkg/lock-frontend`)
-- [ ] `service.rs`: Replace single retry with 5-attempt loop (3s sleep between)
-- [ ] `ssh.rs`: Remove blind retry block in `provision()` (lines 346-355)
+## Phase 2: AMD64 (cx53)
 
-### 2.3 Caddy DNS-01 API key
-- [ ] `config.rs` `caddy_cloudflare_env()`: Add `CF_API_KEY` and `CF_API_EMAIL` env vars alongside `CF_API_TOKEN`
+- [x] Create Hetzner VM (cx53, fsn1, IP 178.105.1.209)
+- [x] Run `tengu-init --direct` — XFS steps 30-36 all green
+- [x] Verify: same XFS + Direct TLS checks as Phase 1 — all pass
+- [x] Reboot VM, confirm persistence — all pass
+- [x] Destroy VM
 
-### 2.4 Hetzner SSH key selection
-- [ ] `hetzner.rs`: Add `delete_ssh_key()` function
-- [ ] `main.rs`: Always delete + recreate SSH key before VM creation
+## Phase 3: Cleanup
 
-### 2.5 Hetzner x86 deprecation
-- [ ] `main.rs`: Add comment in `resolve_hetzner_params()` about cpx deprecation in EU
-
-### 2.6 Cloudflare wildcard DNS update
-- [ ] `main.rs`: Add `update_wildcard_dns()` function using CF API (curl or reqwest)
-- [ ] `main.rs`: Call after `setup_tunnel()` to update `*.tengu.host` A record
-
-### 2.7 Build
-- [ ] `cargo test` -- all tests pass in tengu-init workspace
-- [ ] `cargo build --release` -- tengu-init binary built
-
-## Phase 3 "Zaku": Full Integration Smoke Test
-**Agent**: devops-tengu | **Depends on**: Phase 1 + Phase 2
-
-- [ ] `hcloud server delete tengu` (nuke existing)
-- [ ] Run: `./target/release/tengu-init --hetzner -y --deb-path <path-to-arm64-deb>`
-- [ ] Provision script completes in ONE pass (no retry)
-- [ ] SSH in, verify services: `systemctl status tengu caddy postgresql docker`
-- [ ] Create test-ruby app, git push, verify `curl https://test-ruby.tengu.host/`
-- [ ] Create test-node app, git push, verify `curl https://test-node.tengu.host/`
-- [ ] Create test-static app, git push, verify `curl https://test-static.tengu.host/`
-- [ ] All 3 health checks return 200
-
-## Phase 4 "Gelgoog": Cleanup and Hardening
-**Agent**: code-rust + devops-tengu | **Depends on**: Phase 3
-
-- [ ] Commit tengu-init fixes: `git add -A && git commit && git push`
-- [ ] Delete test apps: `tengu app delete test-ruby test-node test-static -y`
-- [ ] Update `DEFAULT_RELEASE` in `main.rs` to new tag
-- [ ] Tag releases if warranted (`v0.2.0` for both repos)
-
-## Phase 5 "Atlas": Dual TLS Mode — Cloudflare + Direct HTTPS
-**Agent**: code-rust | **Repo**: ~/Projects/tengu-init | **Depends on**: Phase 4
-
-### 5.1 TlsMode enum + TenguConfig restructure
-- [x] Add `TlsMode` enum to `config.rs` (Cloudflare + Direct variants)
-- [x] Replace `cf_api_key` + `cf_email` fields with `tls_mode: TlsMode` on TenguConfig
-- [x] Add `is_cloudflare()` and `acme_email()` helpers
-- [x] Update builder: replace `.cf_api_key()` / `.cf_email()` with `.tls_mode()`
-- [x] Re-export `TlsMode` from `lib.rs`
-
-### 5.2 Mode-aware templates
-- [x] `caddyfile()`: direct mode — no cf_tls snippet, no disable_redirects, standard ACME
-- [x] `tengu_config_toml()`: direct mode — no `[cloudflare]` section, add `[server] tunnel = false`
-- [x] Add tests for both mode outputs
-
-### 5.3 Manifest conditionals
-- [x] Phase 8: gate CF systemd drop-in behind `config.is_cloudflare()`
-- [x] Phase 9: direct mode → always enable UFW; CF mode → respect flag
-
-### 5.4 CLI + config file
-- [x] Add `--direct` flag to Args struct
-- [x] Add `ModeConfig` struct to config file schema
-- [x] Update `ResolvedConfig`: `tls_mode: TlsMode` replaces `cf_api_key` + `cf_email`
-
-### 5.5 Resolve logic
-- [x] `resolve_config()`: mode resolution (--direct > config > interactive prompt)
-- [x] Direct mode: skip CF prompts, skip cert.pem check
-- [x] Direct mode: prompt for `acme_email` (default: notify_email)
-
-### 5.6 Post-provision branching
-- [x] CF mode: existing tunnel + DNS flow
-- [x] Direct mode: print DNS A record reminder (api/docs/git + wildcard)
-
-### 5.7 Display + tests
-- [x] Config tables: show TLS mode row, conditional CF/ACME fields
-- [x] `test_config_cloudflare()` + `test_config_direct()` test helpers
-- [x] `cargo check` + `cargo test` pass
-
-### 5.8 End-to-end verification
-- [ ] `tengu-init show --direct` — no CF references in generated script
-- [ ] `tengu-init --direct --hetzner -y` — full provision on fresh VM
-- [ ] Caddy obtains Let's Encrypt cert via HTTP-01
-- [ ] git push deploy works over SSH on port 22
-- [ ] Existing CF flow unchanged (backward compatible)
-
-### ETA
-
-| Phase | Naive | Coop | Sessions | Notes |
-|-------|-------|------|----------|-------|
-| 5.1-5.2 Config + templates | 3h | ~1h | 1 | Mechanical refactor, compile-driven |
-| 5.3 Manifest conditionals | 1h | ~20m | 1 | Small conditional gates |
-| 5.4-5.5 CLI + resolve | 3h | ~1.5h | 1 | Biggest change, many codepaths |
-| 5.6-5.7 Post-provision + display | 2h | ~45m | 1 | Print statements + table formatting |
-| 5.8 E2E test | 1h | ~30m | 1 | Needs live Hetzner VM + DNS setup |
-| **Total** | **10h** | **~4h** | **2** | One coding session, one test session |
+- [x] Both VMs destroyed
+- [ ] Tag release if warranted

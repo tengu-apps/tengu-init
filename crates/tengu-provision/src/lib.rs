@@ -49,8 +49,8 @@ mod tests {
         let bash = step.to_bash();
 
         assert_eq!(bash.len(), 1);
-        assert!(bash[0].contains("dpkg -s vim"));
         assert!(bash[0].contains("apt-get install -y vim"));
+        assert!(bash[0].contains("|| true"));
     }
 
     #[test]

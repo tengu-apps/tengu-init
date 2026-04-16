@@ -148,7 +148,7 @@ impl Manifest {
         // =========================================================
         manifest.add_step(
             EnsureDirectory::new("/etc/tengu")
-                .with_permissions("0755")
+                .with_permissions("0750")
                 .with_owner("root:root"),
         );
         manifest.add_step(
@@ -181,10 +181,10 @@ impl Manifest {
         // Phase 8: Configuration Files
         // =========================================================
 
-        // Tengu config.toml
+        // Tengu config.toml — permissions fixed after tengu user is created by .deb install
         manifest.add_step(
             WriteFile::new("/etc/tengu/config.toml", config.tengu_config_toml())
-                .with_permissions("0600")
+                .with_permissions("0640")
                 .with_owner("root:root"),
         );
 
@@ -230,6 +230,16 @@ impl Manifest {
         // Create XFS loopback image for /var/lib/docker so overlay2
         // can enforce per-container storage quotas via --storage-opt
         // =========================================================
+
+        // Stop Docker before XFS mount (apt install docker.io auto-starts it)
+        // Docker will be properly started in Phase 10 after XFS is mounted
+        manifest.add_step(
+            RunCommand::new(
+                "Stop Docker for XFS migration",
+                "systemctl stop docker docker.socket 2>/dev/null || true",
+            )
+            .unless("mountpoint -q /var/lib/docker"),
+        );
 
         // Create sparse 160G XFS image (truncate creates truly sparse files)
         manifest.add_step(
@@ -317,19 +327,59 @@ impl Manifest {
         // =========================================================
         // Phase 10: Enable and Start Services
         // =========================================================
-        // Reload systemd to pick up any new/changed unit files from package installs
+        // Reload systemd and wait for units to settle after package installs.
+        // Ubuntu 24.04 can delay unit file creation during post-install scripts.
         manifest.add_step(RunCommand::new(
-            "Reload systemd daemon",
-            "systemctl daemon-reload",
+            "Reload systemd and settle",
+            "systemctl daemon-reload && sleep 2",
         ));
-        // docker.service requires docker.socket for socket activation
-        manifest.add_step(EnsureService::new("docker.socket"));
+
+        // Start Docker — try socket activation first (Docker CE), fall back to service (Ubuntu docker.io).
+        // Ubuntu 24.04's docker.io package may not ship docker.socket.
+        // Wait up to 60s for Docker to become ready (XFS backing init takes time on first boot).
         manifest.add_step(
-            EnsureService::new("docker").with_readiness_check("docker info >/dev/null 2>&1"),
+            RunCommand::new(
+                "Start Docker",
+                "systemctl enable docker.socket 2>/dev/null || true; \
+                 systemctl enable docker 2>/dev/null || true; \
+                 systemctl start docker.socket 2>/dev/null || systemctl start docker 2>/dev/null || true; \
+                 for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done",
+            )
+            .unless("docker info >/dev/null 2>&1"),
         );
-        manifest.add_step(EnsureService::new("postgresql").with_readiness_check("pg_isready -q"));
-        manifest.add_step(EnsureService::new("fail2ban"));
-        manifest.add_step(EnsureService::new("caddy"));
+
+        // Start PostgreSQL
+        manifest.add_step(
+            RunCommand::new(
+                "Start PostgreSQL",
+                "systemctl enable postgresql 2>/dev/null || true; \
+                 systemctl start postgresql 2>/dev/null || true; \
+                 for i in $(seq 1 15); do pg_isready -q 2>/dev/null && break; sleep 2; done",
+            )
+            .unless("pg_isready -q 2>/dev/null"),
+        );
+
+        // Start fail2ban
+        manifest.add_step(
+            RunCommand::new(
+                "Start fail2ban",
+                "systemctl enable fail2ban 2>/dev/null || true; \
+                 systemctl start fail2ban 2>/dev/null || true; \
+                 for i in $(seq 1 5); do systemctl is-active fail2ban >/dev/null 2>&1 && break; sleep 2; done",
+            )
+            .unless("systemctl is-active fail2ban >/dev/null 2>&1"),
+        );
+
+        // Start Caddy
+        manifest.add_step(
+            RunCommand::new(
+                "Start Caddy",
+                "systemctl enable caddy 2>/dev/null || true; \
+                 systemctl start caddy 2>/dev/null || true; \
+                 for i in $(seq 1 5); do systemctl is-active caddy >/dev/null 2>&1 && break; sleep 2; done",
+            )
+            .unless("systemctl is-active caddy >/dev/null 2>&1"),
+        );
 
         // Ollama runs as a user service by default, or systemd service if installed via deb
         manifest.add_step(
@@ -345,15 +395,32 @@ impl Manifest {
         // Phase 11: Install Tengu .deb Package
         // =========================================================
         if config.deb_path.is_some() {
-            // Local .deb was SCP'd to /tmp/tengu-local.deb before provisioning
-            manifest.add_step(RunCommand::new(
-                "Install tengu from local .deb",
-                "DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold /tmp/tengu-local.deb || apt-get install -f -y",
-            ));
+            // Local .deb was SCP'd to /root/tengu-local.deb before provisioning
+            // Wait for apt lock and use --force-confold to keep existing config.toml
+            manifest.add_step(
+                RunCommand::new(
+                    "Install tengu from local .deb",
+                    "while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; \
+                     DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold --force-confnew /root/tengu-local.deb || \
+                     { while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done; \
+                       DEBIAN_FRONTEND=noninteractive apt-get install -f -y --allow-downgrades; }",
+                )
+                .unless("tengu version >/dev/null 2>&1"),
+            );
         } else {
             let tengu_deb_url = "https://github.com/tengu-apps/tengu-deb/releases/download/current/tengu_{arch}.deb";
             manifest.add_step(InstallDebFromUrl::new("tengu", tengu_deb_url));
         }
+
+        // Fix /etc/tengu ownership — tengu user/group created by .deb install
+        // Service runs as User=tengu and needs to read config.toml
+        manifest.add_step(
+            RunCommand::new(
+                "Fix tengu config ownership",
+                "chown root:tengu /etc/tengu /etc/tengu/config.toml 2>/dev/null || true",
+            )
+            .unless("stat -c '%G' /etc/tengu/config.toml 2>/dev/null | grep -q tengu"),
+        );
 
         // Enable and start tengu service
         manifest.add_step(EnsureService::new("tengu"));
@@ -383,8 +450,9 @@ impl Manifest {
                     "command=\"/usr/bin/tengu git-shell {username}\",restrict {key_escaped}"
                 );
                 // Remove any bare key (Hetzner cloud-init injects it) then add with command= restriction
+                // Note: sed -i fails if file doesn't exist, so || true is needed under set -e
                 format!(
-                    "sed -i '\\|^ssh-.*{key_short}|d' /home/tengu/.ssh/authorized_keys 2>/dev/null; \
+                    "sed -i '\\|^ssh-.*{key_short}|d' /home/tengu/.ssh/authorized_keys 2>/dev/null || true; \
                      grep -qF 'git-shell' /home/tengu/.ssh/authorized_keys 2>/dev/null && \
                      grep -qF '{key_short}' /home/tengu/.ssh/authorized_keys 2>/dev/null || \
                      echo '{entry}' >> /home/tengu/.ssh/authorized_keys",
