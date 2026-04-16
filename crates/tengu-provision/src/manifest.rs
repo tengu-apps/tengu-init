@@ -106,6 +106,7 @@ impl Manifest {
             "gnupg",
             "lsb-release",
             "unzip",
+            "xfsprogs",
         ];
 
         for pkg in base_packages {
@@ -222,6 +223,75 @@ impl Manifest {
             WriteFile::new("/etc/fail2ban/jail.local", config.fail2ban_config())
                 .with_permissions("0644")
                 .with_owner("root:root"),
+        );
+
+        // =========================================================
+        // Phase 8b: Docker XFS Backing Storage
+        // Create XFS loopback image for /var/lib/docker so overlay2
+        // can enforce per-container storage quotas via --storage-opt
+        // =========================================================
+
+        // Create sparse 160G XFS image (truncate creates truly sparse files)
+        manifest.add_step(
+            RunCommand::new(
+                "Create Docker XFS image",
+                "truncate -s 160G /var/lib/tengu/docker.img",
+            )
+            .unless("test -f /var/lib/tengu/docker.img"),
+        );
+
+        // Format as XFS
+        manifest.add_step(
+            RunCommand::new(
+                "Format Docker XFS image",
+                "mkfs.xfs -f /var/lib/tengu/docker.img",
+            )
+            .unless("xfs_info /var/lib/docker 2>/dev/null | grep -q 'ftype=1'"),
+        );
+
+        // Ensure /var/lib/docker exists as mount point
+        manifest.add_step(
+            EnsureDirectory::new("/var/lib/docker")
+                .with_permissions("0711")
+                .with_owner("root:root"),
+        );
+
+        // Mount XFS image at /var/lib/docker with project quotas
+        manifest.add_step(
+            RunCommand::new(
+                "Mount Docker XFS image",
+                "mount -o loop,pquota,noatime,nodiratime /var/lib/tengu/docker.img /var/lib/docker",
+            )
+            .unless("mountpoint -q /var/lib/docker"),
+        );
+
+        // Add fstab entry for persistence across reboots
+        manifest.add_step(
+            RunCommand::new(
+                "Add Docker XFS to fstab",
+                "echo '/var/lib/tengu/docker.img /var/lib/docker xfs loop,pquota,noatime,nodiratime 0 0' >> /etc/fstab",
+            )
+            .unless("grep -q 'docker.img' /etc/fstab"),
+        );
+
+        // Docker daemon config: use classic overlay2 driver (not containerd snapshotter)
+        // Required for --storage-opt size= quota enforcement on XFS
+        manifest.add_step(
+            EnsureDirectory::new("/etc/docker")
+                .with_permissions("0755")
+                .with_owner("root:root"),
+        );
+
+        manifest.add_step(
+            WriteFile::new(
+                "/etc/docker/daemon.json",
+                r#"{
+  "storage-driver": "overlay2"
+}
+"#,
+            )
+            .with_permissions("0644")
+            .with_owner("root:root"),
         );
 
         // =========================================================
